@@ -105,14 +105,8 @@ def main():
         text_select=True,
     )
 
-    # Edge Chromium (WebView2) を明示指定、データ保存先をアプリフォルダに固定
-    storage = os.path.join(APP_DIR, '.webview_storage')
-    os.makedirs(storage, exist_ok=True)
-    webview.start(
-        gui='edgechromium',
-        debug=False,
-        storage_path=storage,
-    )
+    # http_server=True で内部HTTPサーバー経由ロード（file:// の制約を回避）
+    webview.start(http_server=True, debug=False)
 
 
 if __name__ == '__main__':
