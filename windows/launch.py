@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
-"""
-Smart Sync — Windows PyWebView ランチャー
-SmartSync.html は exe と同じフォルダに置く（自動更新の対象）
-"""
+import sys
+import multiprocessing
+
+# PyInstaller --onefile on Windows では必須
+if hasattr(multiprocessing, 'freeze_support'):
+    multiprocessing.freeze_support()
+
 import webview
 import os
-import sys
-import json
 import base64
 import shutil
 from datetime import datetime
 
-# PyInstaller でビルドした場合は sys.executable のフォルダ、
-# 通常実行の場合はスクリプトのフォルダを使う
 if getattr(sys, 'frozen', False):
     APP_DIR = os.path.dirname(sys.executable)
 else:
@@ -21,7 +20,7 @@ else:
 HTML_PATH = os.path.join(APP_DIR, 'SmartSync.html')
 DATA_PATH = os.path.join(APP_DIR, 'data.json')
 
-window = None  # webview.create_window の戻り値を後で代入
+window = None
 
 
 class Api:
@@ -57,10 +56,6 @@ class Api:
             return None
 
     def update_app(self, html_content, old_version, new_version):
-        """
-        新しい SmartSync.html を適用してウィンドウをリロードする。
-        失敗時はバックアップから自動ロールバック。
-        """
         ts = datetime.now().strftime('%Y%m%d_%H%M%S')
         backup_path = os.path.join(
             APP_DIR, f'SmartSync_backup_{old_version}_{ts}.html'
@@ -69,9 +64,7 @@ class Api:
             shutil.copy2(HTML_PATH, backup_path)
             with open(HTML_PATH, 'w', encoding='utf-8') as f:
                 f.write(html_content)
-            print(f'update_app: v{old_version} → v{new_version} 適用完了')
-
-            # ウィンドウをリロード
+            print(f'update_app: v{old_version} → v{new_version} 完了')
             url = 'file:///' + HTML_PATH.replace('\\', '/')
             if window:
                 window.load_url(url)
@@ -79,8 +72,8 @@ class Api:
         except Exception as e:
             print('update_app error:', e)
             try:
-                shutil.copy2(backup_path, HTML_PATH)
-                print('update_app: ロールバック完了')
+                if os.path.exists(backup_path):
+                    shutil.copy2(backup_path, HTML_PATH)
             except Exception:
                 pass
             return False
@@ -95,13 +88,13 @@ def main():
             0,
             f'SmartSync.html が見つかりません:\n{HTML_PATH}\n\n'
             'exe と同じフォルダに SmartSync.html を置いてください。',
-            'Smart Sync — 起動エラー',
-            0x10
+            'Smart Sync — 起動エラー', 0x10
         )
         sys.exit(1)
 
     api = Api()
     url = 'file:///' + HTML_PATH.replace('\\', '/')
+
     window = webview.create_window(
         'Smart Sync',
         url,
@@ -111,7 +104,15 @@ def main():
         min_size=(1024, 680),
         text_select=True,
     )
-    webview.start(debug=False)
+
+    # Edge Chromium (WebView2) を明示指定、データ保存先をアプリフォルダに固定
+    storage = os.path.join(APP_DIR, '.webview_storage')
+    os.makedirs(storage, exist_ok=True)
+    webview.start(
+        gui='edgechromium',
+        debug=False,
+        storage_path=storage,
+    )
 
 
 if __name__ == '__main__':
