@@ -38,7 +38,7 @@ def log(msg):
 
 SHIM_TEMPLATE = """<script>
 (function(){{
-  var BASE='http://127.0.0.1:{port}';
+  var BASE='http://localhost:{port}';
   function call(m,a){{
     return fetch(BASE+'/api/'+m,{{
       method:'POST',
@@ -220,7 +220,7 @@ def main():
 
     time.sleep(1.0)  # サーバー安定待ち
 
-    url = f'http://127.0.0.1:{SERVER_PORT}/'
+    url = f'http://localhost:{SERVER_PORT}/'
     log(f'Opening Edge: {url}')
     open_edge_app(url)
 
