@@ -3,10 +3,10 @@ name: Build Windows exe
 on:
   push:
     tags:
-      - 'v*'          # git tag v2.2.0 をプッシュしたら自動ビルド
+      - 'v*'
 
 permissions:
-  contents: write     # リリース作成に必要
+  contents: write
 
 jobs:
   build:
@@ -24,17 +24,17 @@ jobs:
       - name: Install dependencies
         run: pip install pywebview pyinstaller
 
-      - name: Build exe
+      - name: Build exe (onedir)
         working-directory: windows
         run: pyinstaller SmartSync.spec --clean
 
       - name: Package dist
         shell: powershell
         run: |
-          New-Item -ItemType Directory -Force -Path dist_package
-          Copy-Item windows\dist\SmartSync.exe dist_package\SmartSync.exe
-          Copy-Item SmartSync.html dist_package\SmartSync.html
-          Compress-Archive -Path dist_package\* -DestinationPath SmartSync_Windows.zip
+          # SmartSync.html をアプリフォルダ内にコピー
+          Copy-Item SmartSync.html windows\dist\SmartSync\SmartSync.html
+          # フォルダごと zip 化（展開するとそのまま使える構成）
+          Compress-Archive -Path windows\dist\SmartSync -DestinationPath SmartSync_Windows.zip
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -45,9 +45,9 @@ jobs:
             ## Smart Sync ${{ github.ref_name }}
 
             ### インストール方法
-            1. `SmartSync_Windows.zip` をダウンロード・展開
-            2. `SmartSync.exe` と `SmartSync.html` を同じフォルダに置く
-            3. `SmartSync.exe` を起動
+            1. `SmartSync_Windows.zip` をダウンロードして展開
+            2. 展開された `SmartSync` フォルダをそのままデスクトップなどに置く
+            3. フォルダ内の `SmartSync.exe` をダブルクリックで起動
 
             ### 更新方法（既存ユーザー）
             アプリ起動時に自動で更新通知が表示されます。
