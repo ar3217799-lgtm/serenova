@@ -222,16 +222,16 @@ def main():
 
     url = f'http://127.0.0.1:{SERVER_PORT}/'
     log(f'Opening Edge: {url}')
-    proc = open_edge_app(url)
+    open_edge_app(url)
 
-    if proc:
-        proc.wait()
-    else:
-        try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            pass
+    # Edge が既存インスタンスに引き渡して即終了しても
+    # サーバーは動き続けてページに応答できるようにする
+    log('Server running. Close this process from Task Manager to exit.')
+    try:
+        while True:
+            time.sleep(60)
+    except KeyboardInterrupt:
+        pass
 
     log('App closed')
     server.shutdown()
