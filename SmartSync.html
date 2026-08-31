@@ -776,7 +776,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.1.0';
+const APP_VERSION = '2.1.1';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -2922,7 +2922,7 @@ function UserManagement({
     // 利用中止ユーザーはマスタ表から非表示（データは保持）
     const userMap = Object.fromEntries(data.users.map(u => [u.name, u]));
     // [entry, realIndex] のペアで保持し、表示番号と実インデックスを分離
-    const visibleEntries = entries.map((e, i) => [e, i]).filter(([e]) => !userMap[e.userName]?.discontinued);
+    const visibleEntries = entries.map((e, i) => [e, i]).filter(([e]) => !userMap[e.userName]?.discontinued).sort(([a], [b]) => a.userName.localeCompare(b.userName, 'ja'));
     const [showPanel, setShowPanel] = useState(false);
     const [selected, setSelected] = useState(new Set());
     const toggleUser = name => setSelected(prev => {
@@ -3827,7 +3827,7 @@ function DailyAttendance({
     const newEntries = filtered.map(dm => ({
       userName: dm.userName,
       substituteDay: null
-    }));
+    })).sort((a, b) => a.userName.localeCompare(b.userName, 'ja'));
     setAtt(() => ({
       date,
       entries: newEntries
@@ -3841,7 +3841,7 @@ function DailyAttendance({
       entries: [...(a.entries || []), {
         userName: newUser,
         substituteDay: newSub || null
-      }]
+      }].sort((x, y) => x.userName.localeCompare(y.userName, 'ja'))
     }));
     setNU('');
     setNS('');
@@ -3868,7 +3868,7 @@ function DailyAttendance({
       date,
       dayOfWeek: dow,
       count: validEntries.length,
-      users: validEntries.map(e => e.userName).sort()
+      users: validEntries.map(e => e.userName).sort((a, b) => a.localeCompare(b, 'ja'))
     };
     setData(p => ({
       ...p,
@@ -3968,13 +3968,14 @@ function DailyAttendance({
       return sw.includes(weekNum);
     });
     const skip = active.filter(dm => !today.includes(dm));
-    return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", null, "本日対象（第", weekNum, "週）：", today.map(u => u.userName).join('　') || 'なし'), skip.length > 0 && /*#__PURE__*/React.createElement("span", {
+    const sortUN = arr => [...arr].sort((a, b) => a.userName.localeCompare(b.userName, 'ja'));
+    return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", null, "本日対象（第", weekNum, "週）：", sortUN(today).map(u => u.userName).join('　') || 'なし'), skip.length > 0 && /*#__PURE__*/React.createElement("span", {
       style: {
         marginLeft: 10,
         color: 'var(--text3)',
         opacity: .7
       }
-    }, "隔週スキップ：", skip.map(u => u.userName).join('　')));
+    }, "隔週スキップ：", sortUN(skip).map(u => u.userName).join('　')));
   })())), dateIssues.map((iss, i) => /*#__PURE__*/React.createElement("div", {
     key: i,
     className: `alert alert-${iss.type === 'error' ? 'err' : 'warn'}`,
@@ -4319,8 +4320,8 @@ function RehabSchedule({
     }
   }));
   const assignedUsers = new Set(schedule.flatMap(s => s.users));
-  const unassignedUsers = dayUsers.filter(u => u.rehabCategory && !assignedUsers.has(u.userName));
-  const noRehabUsers = dayUsers.filter(u => !u.rehabCategory);
+  const unassignedUsers = [...dayUsers].filter(u => u.rehabCategory && !assignedUsers.has(u.userName)).sort((a, b) => a.userName.localeCompare(b.userName, 'ja'));
+  const noRehabUsers = [...dayUsers].filter(u => !u.rehabCategory).sort((a, b) => a.userName.localeCompare(b.userName, 'ja'));
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "page-title"
   }, /*#__PURE__*/React.createElement("span", null, "🏃"), "リハビリ時間割"), /*#__PURE__*/React.createElement("div", {
@@ -4515,7 +4516,7 @@ function RehabSchedule({
     onChange: e => addUser(idx, e.target.value)
   }, /*#__PURE__*/React.createElement("option", {
     value: ""
-  }, "＋ 追加"), dayUsers.filter(u => !slot.users.includes(u.userName)).map(u => /*#__PURE__*/React.createElement("option", {
+  }, "＋ 追加"), [...dayUsers].filter(u => !slot.users.includes(u.userName)).sort((a, b) => a.userName.localeCompare(b.userName, 'ja')).map(u => /*#__PURE__*/React.createElement("option", {
     key: u.userName,
     value: u.userName
   }, u.userName))) : /*#__PURE__*/React.createElement("span", {
