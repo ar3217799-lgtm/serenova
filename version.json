@@ -1,7 +1,7 @@
 {
-  "version": "2.1.2",
+  "version": "2.1.3",
   "fileUrl": "https://ar3217799-lgtm.github.io/serenova/SmartSync.html",
-  "sha256": "1c26b5d1a1b3528150dc03a5e67e653cfa2a395fb77d33b63ef82dba0a1d42cf",
-  "releaseNote": "フリガナ欄を追加し、五十音順の並び替えに対応",
+  "sha256": "f7d7b56a631677cc035ef3def4bbdca98b37cdc67676f1aa8b6ceb31528e1610",
+  "releaseNote": "漢字入力から自動でふりがな取得・五十音順に対応",
   "releaseDate": "2026-08-31"
 }

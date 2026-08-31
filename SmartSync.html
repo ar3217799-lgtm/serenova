@@ -771,12 +771,13 @@ const {
   useState,
   useEffect,
   useCallback,
-  useMemo
+  useMemo,
+  useRef
 } = React;
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.1.2';
+const APP_VERSION = '2.1.3';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -2331,6 +2332,8 @@ function UserManagement({
       init,
       onClose
     }) {
+      const kanaAccumRef = useRef(init?.kana || '');
+      const compKanaRef = useRef('');
       const [f, setF] = useState(init || {
         name: '',
         kana: '',
@@ -2409,27 +2412,21 @@ function UserManagement({
       }, "利用者名 *"), /*#__PURE__*/React.createElement("input", {
         className: "form-input",
         value: f.name,
-        onChange: e => setF(p => ({
-          ...p,
-          name: e.target.value
-        })),
-        placeholder: "氏名（例：山田 太郎）"
-      })), /*#__PURE__*/React.createElement("div", {
-        className: "form-group",
-        style: {
-          gridColumn: '1/-1'
-        }
-      }, /*#__PURE__*/React.createElement("label", {
-        className: "form-label"
-      }, "フリガナ（五十音順の並び替えに使用）"), /*#__PURE__*/React.createElement("input", {
-        className: "form-input",
-        value: f.kana || '',
-        onChange: e => setF(p => ({
-          ...p,
-          kana: e.target.value
-        })),
-        placeholder: "ヤマダ タロウ"
-      })), /*#__PURE__*/React.createElement("div", {
+        onChange: e => {
+          const v = e.target.value;
+          if (!v) kanaAccumRef.current = '';
+          setF(p => ({...p, name: v, kana: kanaAccumRef.current}));
+        },
+        onCompositionUpdate: e => { compKanaRef.current = e.data; },
+        onCompositionEnd: () => {
+          kanaAccumRef.current += compKanaRef.current;
+          compKanaRef.current = '';
+          setF(p => ({...p, kana: kanaAccumRef.current}));
+        },
+        placeholder: "氏名（日本語入力で変換するとふりがな自動設定）"
+      }), f.kana && /*#__PURE__*/React.createElement("div", {
+        style: {fontSize: 11, color: 'var(--text2)', marginTop: 4}
+      }, "ふりがな：", f.kana)), /*#__PURE__*/React.createElement("div", {
         className: "form-group",
         style: {
           gridColumn: '1/-1'
