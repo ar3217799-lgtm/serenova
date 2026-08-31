@@ -776,7 +776,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.1.1';
+const APP_VERSION = '2.1.2';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -900,7 +900,11 @@ const DOW_MAP = {
 };
 
 /* ── 五十音順ソート ── */
-const sortByKana = arr => [...arr].sort((a, b) => a.name.localeCompare(b.name, 'ja'));
+const sortByKana = arr => [...arr].sort((a, b) => {
+  const ka = a.kana || a.name;
+  const kb = b.kana || b.name;
+  return ka.localeCompare(kb, 'ja');
+});
 
 /* ── 月の第N週を返す（利用頻度判定用） ── */
 const getWeekOfMonth = dateStr => {
@@ -2216,6 +2220,7 @@ function UserManagement({
           users: [...p.users, ...newNames.map(n => ({
             id: uid(),
             name: n,
+            kana: '',
             notes: ''
           }))]
         }));
@@ -2328,6 +2333,7 @@ function UserManagement({
     }) {
       const [f, setF] = useState(init || {
         name: '',
+        kana: '',
         notes: '',
         hospitalized: false,
         hospitalizedSince: '',
@@ -2407,7 +2413,22 @@ function UserManagement({
           ...p,
           name: e.target.value
         })),
-        placeholder: "氏名"
+        placeholder: "氏名（例：山田 太郎）"
+      })), /*#__PURE__*/React.createElement("div", {
+        className: "form-group",
+        style: {
+          gridColumn: '1/-1'
+        }
+      }, /*#__PURE__*/React.createElement("label", {
+        className: "form-label"
+      }, "フリガナ（五十音順の並び替えに使用）"), /*#__PURE__*/React.createElement("input", {
+        className: "form-input",
+        value: f.kana || '',
+        onChange: e => setF(p => ({
+          ...p,
+          kana: e.target.value
+        })),
+        placeholder: "ヤマダ タロウ"
       })), /*#__PURE__*/React.createElement("div", {
         className: "form-group",
         style: {
@@ -2820,8 +2841,8 @@ function UserManagement({
       className: "card"
     }, /*#__PURE__*/React.createElement("div", {
       className: "table-wrap"
-    }, /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "利用者名"), /*#__PURE__*/React.createElement("th", null, "状態"), /*#__PURE__*/React.createElement("th", null, "登録曜日"), /*#__PURE__*/React.createElement("th", null, "備考"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, data.users.length === 0 && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
-      colSpan: 5
+    }, /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "利用者名"), /*#__PURE__*/React.createElement("th", null, "フリガナ"), /*#__PURE__*/React.createElement("th", null, "状態"), /*#__PURE__*/React.createElement("th", null, "登録曜日"), /*#__PURE__*/React.createElement("th", null, "備考"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, data.users.length === 0 && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+      colSpan: 6
     }, /*#__PURE__*/React.createElement("div", {
       className: "empty"
     }, "利用者を登録してください"))), sortByKana(data.users).map(u => {
@@ -2835,7 +2856,14 @@ function UserManagement({
         style: {
           fontWeight: 500
         }
-      }, u.name), /*#__PURE__*/React.createElement("td", null, u.discontinued ? /*#__PURE__*/React.createElement("span", {
+      }, u.name), /*#__PURE__*/React.createElement("td", {
+        style: {
+          fontSize: 12,
+          color: 'var(--text2)'
+        }
+      }, u.kana || /*#__PURE__*/React.createElement("span", {
+        style: {color: 'var(--text3)'}
+      }, "—")), /*#__PURE__*/React.createElement("td", null, u.discontinued ? /*#__PURE__*/React.createElement("span", {
         style: {
           display: 'inline-block',
           padding: '2px 8px',
