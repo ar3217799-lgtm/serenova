@@ -1,7 +1,7 @@
 {
-  "version": "2.1.4",
+  "version": "2.1.5",
   "fileUrl": "https://ar3217799-lgtm.github.io/serenova/SmartSync.html",
-  "sha256": "7337ec522614e505d0d1e05d2875e0a59cc8de57d0d8dc2ed3f7469e4142ce94",
-  "releaseNote": "漢字から自動ふりがな生成・全利用者が五十音順に",
+  "sha256": "8f739a09b56ec7bcc7b08abb94f1476a8f42920d69061f8783495641b267bce3",
+  "releaseNote": "五十音順ソートを全画面で完全修正（IME入力のふりがな上書き含む）",
   "releaseDate": "2026-09-04"
 }
