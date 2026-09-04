@@ -1,7 +1,7 @@
 {
-  "version": "2.1.7",
+  "version": "2.2.0",
   "fileUrl": "https://ar3217799-lgtm.github.io/serenova/SmartSync.html",
-  "sha256": "2f1a5c9c527e910edee14f012b700ab62c0c0cba1a7ad7db92f0e80e8ea62e4f",
-  "releaseNote": "データ読込時にかな即時生成・五十音順を確実に修正",
+  "sha256": "b8b52002e841b634b61b91eca382fefe4a069f1f58a2b6c197867eb91f4df40a",
+  "releaseNote": "漢字読み辞書を約18,000語に大幅拡張・フリガナを直接編集可能に（五十音順を完全修正）",
   "releaseDate": "2026-09-04"
 }
