@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.1.6';
+const APP_VERSION = '2.1.7';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -985,9 +985,11 @@ function loadData() {
     DAYS.forEach(d => {
       if (!dm[d]) dm[d] = [];
     });
+    const users = (p.users || []).map(u => u.name ? {...u, kana: autoKana(u.name)} : u);
     return {
       ...def,
       ...p,
+      users,
       rehabSchedule: rs,
       dayMasters: dm,
       karteRecords: p.karteRecords || [],
@@ -6033,14 +6035,16 @@ function App() {
           DAYS.forEach(d => {
             if (!dm[d]) dm[d] = [];
           });
-          setDataRaw({
+          const users = (p.users || []).map(u => u.name ? {...u, kana: autoKana(u.name)} : u);
+          setData(() => ({
             ...def,
             ...p,
+            users,
             rehabSchedule: rs,
             dayMasters: dm,
             karteRecords: p.karteRecords || [],
             recBaseDate: p.recBaseDate || '2026-04-27'
-          });
+          }));
         } catch (err) {
           console.error('load_data parse error:', err);
         }

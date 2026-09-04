@@ -1,7 +1,7 @@
 {
-  "version": "2.1.6",
+  "version": "2.1.7",
   "fileUrl": "https://ar3217799-lgtm.github.io/serenova/SmartSync.html",
-  "sha256": "2399bee3fe20393b658923983a62997748cdf1c79856221b3ece39374bd76dd5",
-  "releaseNote": "左下にバージョン番号を常時表示",
+  "sha256": "2f1a5c9c527e910edee14f012b700ab62c0c0cba1a7ad7db92f0e80e8ea62e4f",
+  "releaseNote": "データ読込時にかな即時生成・五十音順を確実に修正",
   "releaseDate": "2026-09-04"
 }
