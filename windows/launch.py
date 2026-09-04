@@ -90,10 +90,21 @@ def save_excel(filename, b64data):
         return None
 
 def update_app_fn(html_content, old_version, new_version):
+    backup_dir = os.path.join(APP_DIR, '_backups')
+    os.makedirs(backup_dir, exist_ok=True)
     ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-    backup = os.path.join(APP_DIR, f'SmartSync_backup_{old_version}_{ts}.html')
+    backup = os.path.join(backup_dir, f'SmartSync_backup_{old_version}_{ts}.html')
     try:
         shutil.copy2(HTML_PATH, backup)
+        # 古いバックアップを削除（最新3件だけ保持）
+        old_backups = sorted(
+            [f for f in os.listdir(backup_dir) if f.startswith('SmartSync_backup_')],
+        )
+        for f in old_backups[:-3]:
+            try:
+                os.remove(os.path.join(backup_dir, f))
+            except Exception:
+                pass
         with open(HTML_PATH, 'w', encoding='utf-8') as f:
             f.write(html_content)
         log(f'update: v{old_version} → v{new_version}')
