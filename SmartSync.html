@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.1.5';
+const APP_VERSION = '2.1.6';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -6137,7 +6137,7 @@ function App() {
     }
   }, item.badge)))), /*#__PURE__*/React.createElement("div", {
     className: "sidebar-footer"
-  }, "データは自動保存されます", /*#__PURE__*/React.createElement("br", null), "登録者: ", data.users.length, "名\u3000スタッフ: ", data.staff.length, "名")), /*#__PURE__*/React.createElement("div", {
+  }, "データは自動保存されます", /*#__PURE__*/React.createElement("br", null), "登録者: ", data.users.length, "名\u3000スタッフ: ", data.staff.length, "名", /*#__PURE__*/React.createElement("br", null), "v", APP_VERSION)), /*#__PURE__*/React.createElement("div", {
     key: dispView,
     className: `main ${animCls}`
   }, dispView === 'dashboard' && /*#__PURE__*/React.createElement(Dashboard, {
