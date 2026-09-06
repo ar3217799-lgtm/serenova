@@ -11,8 +11,14 @@
 
 ## 1. 新規に施設へ導入する
 
-1. `windows/build.bat` を Windows 上で実行し、`dist_package/` に
-   `SmartSync.exe` と `SmartSync.html` を生成する。
+1. exe をビルドする。2通りの方法がある。
+   - **Windows機がある場合**: `windows/build.bat` を実行すると
+     `dist_package/` に `SmartSync.exe` と `SmartSync.html` が生成される。
+   - **Windows機が無い場合（Mac等）**: GitHub Actions で自動ビルドできる。
+     `windows/` 配下を変更して push するか、GitHubの Actions タブから
+     「Build Windows exe」を手動実行（workflow_dispatch）する。
+     完了後、そのワークフロー実行のページ下部からアーティファクト
+     `SmartSync-dist_package`（zip）をダウンロードする。
 2. ライセンスを発行する（下記「ライセンス発行」）。生成された `.key` ファイルを
    `license.key` にリネームし、`dist_package/` に追加する。
 3. `dist_package/` フォルダを丸ごと施設の親機PCへコピーする。
