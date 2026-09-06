@@ -1,11 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyWebView 不使用 — 標準ライブラリのみ、--onefile ビルド
+# PyWebView 不使用 — 標準ライブラリ + rsa（ライセンス検証）のみ、--onefile ビルド
 a = Analysis(
     ['launch.py'],
     pathex=[],
     binaries=[],
     datas=[],
-    hiddenimports=[],
+    hiddenimports=['licensing', 'rsa', 'rsa.pkcs1', 'rsa.key', 'rsa.core',
+                   'rsa.common', 'rsa.transform', 'rsa.randnum', 'pyasn1',
+                   'pyasn1.codec.der.decoder', 'pyasn1.codec.der.encoder'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

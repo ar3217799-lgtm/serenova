@@ -36,6 +36,10 @@ echo  完了！ dist_package フォルダに:
 echo    SmartSync.exe
 echo    SmartSync.html
 echo  が生成されました。
-echo  この2ファイルをユーザーに配布してください。
+echo.
+echo  施設に配布する際は、発行した license.key も
+echo  同じフォルダに追加してください（無いとお試し運用=1台に制限されます）。
+echo  子機は別途インストール不要。親機のURLをブラウザで開くだけです。
+echo  詳しくは ..\DEPLOY.md を参照してください。
 echo ================================
 pause

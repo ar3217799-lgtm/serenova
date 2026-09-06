@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+license.key
+config.json
+devices.json
+data.json
+smartsync.log
+_backups/
+dist/
+build/
+dist_package/

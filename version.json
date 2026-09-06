@@ -1,7 +1,7 @@
 {
-  "version": "2.2.1",
+  "version": "2.3.0",
   "fileUrl": "https://ar3217799-lgtm.github.io/serenova/SmartSync.html",
-  "sha256": "043e2785eb46d989bffe358f156b38681de6e002eb5fcc0f15eae86d601ad7b5",
-  "releaseNote": "ふりがな編集中に並び替わらないよう修正（確定時のみ反映）",
-  "releaseDate": "2026-09-04"
+  "sha256": "56a9814d00827f06d1e742149cf4cdf15f61a989f68dd2a29f4e1a753f580965",
+  "releaseNote": "施設内でのデータ共有・端末管理機能を追加（要: 新しいSmartSync.exeへの入れ替え）",
+  "releaseDate": "2026-09-06"
 }

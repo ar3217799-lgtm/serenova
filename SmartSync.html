@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.2.1';
+const APP_VERSION = '2.3.0';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -2265,6 +2265,123 @@ function TemplatesSettings({
       color: 'var(--text3)'
     }
   }, "↺ デフォルトに戻す")));
+}
+
+/* ══ 端末管理（親機のみ表示） ════════════════════════════════════════════════ */
+function isHostMachine() {
+  return typeof window !== 'undefined' && window.__smartsyncIsHost === true;
+}
+
+function DeviceManagement() {
+  const [lic, setLic] = useState(null);
+  const [pairCode, setPairCode] = useState('');
+  const [devices, setDevices] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = useCallback(() => {
+    const api = window.pywebview && window.pywebview.api;
+    if (!api) return;
+    if (api.get_license_info) api.get_license_info().then(setLic).catch(() => {});
+    if (api.get_pair_code) api.get_pair_code().then(r => setPairCode(r && r.pairCode || '')).catch(() => {});
+    if (api.list_devices) api.list_devices().then(setDevices).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    const t = setInterval(refresh, 5000);
+    return () => clearInterval(t);
+  }, [refresh]);
+
+  const regenerateCode = () => {
+    if (!window.confirm('ペアリングコードを再発行しますか？\n古いコードはこの後使えなくなります。（既に追加済みの端末は影響を受けません）')) return;
+    setBusy(true);
+    window.pywebview.api.regenerate_pair_code().then(r => {
+      setPairCode(r && r.pairCode || '');
+      setBusy(false);
+      showToast('新しいコードを発行しました', 'ok');
+    }).catch(() => setBusy(false));
+  };
+
+  const revoke = (id, name) => {
+    if (!window.confirm(`「${name}」を端末一覧から削除しますか？\nこの端末は次回アクセス時に再度コードの入力が必要になります。`)) return;
+    window.pywebview.api.revoke_device(id).then(() => {
+      showToast('端末を削除しました', 'ok');
+      refresh();
+    });
+  };
+
+  if (!lic || !devices) {
+    return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      className: "page-title"
+    }, /*#__PURE__*/React.createElement("span", null, "🖥️"), "端末管理"), /*#__PURE__*/React.createElement("div", {
+      className: "empty"
+    }, "読み込み中…"));
+  }
+
+  const statusLabel = !lic.present ? 'お試し運用（未導入）'
+    : lic.expired ? '期限切れ'
+    : lic.valid ? '有効'
+    : `無効（${lic.reason || '不明'}）`;
+  const statusColor = lic.valid ? '#2e9e5b' : (lic.present ? '#b4232a' : 'var(--text3)');
+
+  return /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("div", { className: "page-title" },
+      /*#__PURE__*/React.createElement("span", null, "🖥️"), "端末管理"),
+
+    /*#__PURE__*/React.createElement("div", { className: "card", style: { marginBottom: 16 } },
+      /*#__PURE__*/React.createElement("div", { style: { fontWeight: 600, marginBottom: 10 } }, "ライセンス"),
+      /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 24, flexWrap: 'wrap', fontSize: 13 } },
+        lic.facility && /*#__PURE__*/React.createElement("div", null,
+          /*#__PURE__*/React.createElement("div", { style: { color: 'var(--text3)', fontSize: 11 } }, "施設名"),
+          lic.facility),
+        /*#__PURE__*/React.createElement("div", null,
+          /*#__PURE__*/React.createElement("div", { style: { color: 'var(--text3)', fontSize: 11 } }, "状態"),
+          /*#__PURE__*/React.createElement("span", { style: { color: statusColor, fontWeight: 600 } }, statusLabel)),
+        /*#__PURE__*/React.createElement("div", null,
+          /*#__PURE__*/React.createElement("div", { style: { color: 'var(--text3)', fontSize: 11 } }, "利用可能台数"),
+          /*#__PURE__*/React.createElement("span", { style: { fontWeight: 600 } }, lic.used, " / ", lic.maxDevices, " 台")),
+        lic.expiresAt && /*#__PURE__*/React.createElement("div", null,
+          /*#__PURE__*/React.createElement("div", { style: { color: 'var(--text3)', fontSize: 11 } }, "有効期限"),
+          fmtDate(lic.expiresAt))),
+      !lic.present && /*#__PURE__*/React.createElement("div", {
+        style: { marginTop: 10, fontSize: 12, color: 'var(--text2)', padding: '8px 12px', background: 'var(--bg2)', borderRadius: 8, border: '1px solid var(--border)' }
+      }, "license.key が導入されていないため、お試し運用として1台のみで動作しています。台数を増やすにはライセンスの発行が必要です。")),
+
+    /*#__PURE__*/React.createElement("div", { className: "card", style: { marginBottom: 16 } },
+      /*#__PURE__*/React.createElement("div", { style: { fontWeight: 600, marginBottom: 6 } }, "他のパソコンを追加する"),
+      /*#__PURE__*/React.createElement("div", { style: { fontSize: 12, color: 'var(--text2)', marginBottom: 12 } },
+        "追加したいパソコンでこの親機のアドレスをブラウザで開き、下のコードを入力してもらってください。"),
+      /*#__PURE__*/React.createElement("div", { style: { display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' } },
+        /*#__PURE__*/React.createElement("div", {
+          style: { fontSize: 32, fontWeight: 700, letterSpacing: 8, fontFamily: 'monospace', padding: '8px 20px', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 10 }
+        }, pairCode || '------'),
+        /*#__PURE__*/React.createElement("button", {
+          className: "btn btn-ghost btn-sm", disabled: busy, onClick: regenerateCode
+        }, "コードを再発行"))),
+
+    /*#__PURE__*/React.createElement("div", { className: "card" },
+      /*#__PURE__*/React.createElement("div", { style: { fontWeight: 600, marginBottom: 10 } },
+        "登録済みの端末（", devices.used, " / ", devices.limit, " 台）"),
+      devices.devices.length === 0 && /*#__PURE__*/React.createElement("div", { className: "empty" }, "まだ登録された端末がありません。"),
+      devices.devices.length > 0 && /*#__PURE__*/React.createElement("table", null,
+        /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null,
+          /*#__PURE__*/React.createElement("th", null, "端末"),
+          /*#__PURE__*/React.createElement("th", null, "IPアドレス"),
+          /*#__PURE__*/React.createElement("th", null, "初回登録"),
+          /*#__PURE__*/React.createElement("th", null, "最終アクセス"),
+          /*#__PURE__*/React.createElement("th", null))),
+        /*#__PURE__*/React.createElement("tbody", null, devices.devices.map(d =>
+          /*#__PURE__*/React.createElement("tr", { key: d.id },
+            /*#__PURE__*/React.createElement("td", null, d.name || d.ip, window.__SMARTSYNC_DEVICE_ID === d.id && /*#__PURE__*/React.createElement("span", {
+              style: { marginLeft: 6, fontSize: 11, color: 'var(--gold)' }
+            }, "（この端末）")),
+            /*#__PURE__*/React.createElement("td", { style: { fontSize: 12, color: 'var(--text2)' } }, d.ip),
+            /*#__PURE__*/React.createElement("td", { style: { fontSize: 12, color: 'var(--text2)' } }, (d.firstSeen || '').replace('T', ' ')),
+            /*#__PURE__*/React.createElement("td", { style: { fontSize: 12, color: 'var(--text2)' } }, (d.lastSeen || '').replace('T', ' ')),
+            /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("button", {
+              className: "btn btn-danger btn-sm", onClick: () => revoke(d.id, d.name || d.ip)
+            }, "削除")))))))
+  );
 }
 function UserManagement({
   data,
@@ -6011,6 +6128,40 @@ function App() {
     return () => clearTimeout(tid);
   }, []);
 
+  // 他の端末が保存した最新データを取り込む（施設内共有時。3秒間隔でシムが検知して発火）
+  useEffect(() => {
+    const onRemote = e => {
+      try {
+        const p = JSON.parse(e.detail.json);
+        const def = defaultData();
+        const rs = p.rehabSchedule || {};
+        DAYS.forEach(d => { if (!rs[d]) rs[d] = def.rehabSchedule[d]; });
+        const dm = p.dayMasters || {};
+        DAYS.forEach(d => { if (!dm[d]) dm[d] = []; });
+        const users = (p.users || []).map(u => (u.name && !u.kanaManual) ? {...u, kana: autoKana(u.name)} : u);
+        setDataRaw({
+          ...def,
+          ...p,
+          users,
+          rehabSchedule: rs,
+          dayMasters: dm,
+          karteRecords: p.karteRecords || [],
+          recBaseDate: p.recBaseDate || '2026-04-27'
+        });
+        showToast(
+          e.detail.conflict
+            ? '他の端末が先に保存したため、最新のデータに更新しました。直前の操作はもう一度お試しください。'
+            : '他の端末の変更を取り込みました',
+          e.detail.conflict ? 'warn' : 'ok'
+        );
+      } catch (err) {
+        console.error('remote data merge error:', err);
+      }
+    };
+    window.addEventListener('smartsync-remote-data', onRemote);
+    return () => window.removeEventListener('smartsync-remote-data', onRemote);
+  }, []);
+
   // ふりがな自動生成（辞書から常に最新値で上書き。IME入力の不正値も修正）
   useEffect(() => {
     if (!data.users.length) return;
@@ -6090,22 +6241,24 @@ function App() {
         }
       }).catch(err => console.error('load_data error:', err));
     };
-    if (window.pywebview && window.pywebview.api) {
-      restoreFromApi();
-    } else {
-      window.addEventListener('pywebviewready', restoreFromApi, {
-        once: true
-      });
-      let tries = 0;
-      const poll = setInterval(() => {
-        if (window.pywebview && window.pywebview.api) {
-          clearInterval(poll);
-          window.removeEventListener('pywebviewready', restoreFromApi);
-          restoreFromApi();
-        }
-        if (++tries > 50) clearInterval(poll);
-      }, 100);
-    }
+    // 施設内共有ではペアリング成立前から window.pywebview.api が存在するため、
+    // 「存在するかどうか」で一度きり判定せず、以後の pywebviewready（ペアリング
+    // 成立時に発火）でも必ず再取得できるよう常時リッスンする。
+    const alreadyReady = !!(window.pywebview && window.pywebview.api);
+    if (alreadyReady) restoreFromApi();
+    window.addEventListener('pywebviewready', restoreFromApi);
+    let tries = 0;
+    const poll = alreadyReady ? null : setInterval(() => {
+      if (window.pywebview && window.pywebview.api) {
+        restoreFromApi();
+        clearInterval(poll);
+      }
+      if (++tries > 50) clearInterval(poll);
+    }, 100);
+    return () => {
+      window.removeEventListener('pywebviewready', restoreFromApi);
+      if (poll) clearInterval(poll);
+    };
   }, []);
   const issues = useMemo(() => checkContradictions(data), [data]);
   const errCnt = issues.filter(i => i.type === 'error').length;
@@ -6146,7 +6299,11 @@ function App() {
     id: 'templates',
     icon: '✏️',
     label: '定型文設定'
-  }];
+  }, ...(isHostMachine() ? [{
+    id: 'devices',
+    icon: '🖥️',
+    label: '端末管理'
+  }] : [])];
   return /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
@@ -6211,7 +6368,7 @@ function App() {
   }), dispView === 'templates' && /*#__PURE__*/React.createElement(TemplatesSettings, {
     data: data,
     setData: setData
-  })), /*#__PURE__*/React.createElement(Toaster, {
+  }), dispView === 'devices' && /*#__PURE__*/React.createElement(DeviceManagement, null)), /*#__PURE__*/React.createElement(Toaster, {
     toasts: toasts,
     remove: removeToast
   }), /*#__PURE__*/React.createElement(UpdateBanner, {
