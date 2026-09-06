@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.2.0';
+const APP_VERSION = '2.2.1';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -931,6 +931,43 @@ function _readGiven(t) {
 /* ── 名前→かな 検索マップ（App レンダリング毎に更新） ── */
 let __kanaMap = {};
 const kanaFor = name => __kanaMap[name] || name;
+
+/* ── フリガナ編集セル（入力中は再ソートせず、確定時のみ反映） ── */
+function KanaCell({user, setData}) {
+  const [v, setV] = useState(user.kana || '');
+  const [editing, setEditing] = useState(false);
+  useEffect(() => {
+    if (!editing) setV(user.kana || '');
+  }, [user.kana, editing]);
+  const commit = () => {
+    setEditing(false);
+    const nv = v.trim();
+    if (nv === (user.kana || '')) return;
+    setData(p => ({
+      ...p,
+      users: p.users.map(x => x.id === user.id ? {...x, kana: nv, kanaManual: true} : x)
+    }));
+  };
+  return /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    value: v,
+    title: "ふりがなを直せます（入力を終えると並び順に反映されます）",
+    placeholder: "ふりがな",
+    style: {
+      fontSize: 12,
+      padding: '3px 6px',
+      width: 130,
+      background: user.kanaManual ? 'rgba(201,168,76,.10)' : 'transparent',
+      border: '1px solid ' + (user.kanaManual ? 'rgba(201,168,76,.45)' : 'rgba(255,255,255,.10)')
+    },
+    onFocus: () => setEditing(true),
+    onChange: e => { setEditing(true); setV(e.target.value); },
+    onBlur: commit,
+    onKeyDown: e => {
+      if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); e.target.blur(); }
+    }
+  });
+}
 
 /* ── 五十音順ソート ── */
 const sortByKana = arr => [...arr].sort((a, b) => {
@@ -2892,26 +2929,7 @@ function UserManagement({
           fontSize: 12,
           color: 'var(--text2)'
         }
-      }, /*#__PURE__*/React.createElement("input", {
-        className: "form-input",
-        value: u.kana || '',
-        title: "ふりがなを直せます（並び順に反映されます）",
-        placeholder: "ふりがな",
-        style: {
-          fontSize: 12,
-          padding: '3px 6px',
-          width: 130,
-          background: u.kanaManual ? 'rgba(201,168,76,.10)' : 'transparent',
-          border: '1px solid ' + (u.kanaManual ? 'rgba(201,168,76,.45)' : 'rgba(255,255,255,.10)')
-        },
-        onChange: e => {
-          const v = e.target.value;
-          setData(p => ({
-            ...p,
-            users: p.users.map(x => x.id === u.id ? {...x, kana: v, kanaManual: true} : x)
-          }));
-        }
-      })), /*#__PURE__*/React.createElement("td", null, u.discontinued ? /*#__PURE__*/React.createElement("span", {
+      }, /*#__PURE__*/React.createElement(KanaCell, {user: u, setData: setData})), /*#__PURE__*/React.createElement("td", null, u.discontinued ? /*#__PURE__*/React.createElement("span", {
         style: {
           display: 'inline-block',
           padding: '2px 8px',
