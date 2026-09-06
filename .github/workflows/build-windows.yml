@@ -1,0 +1,40 @@
+name: Build Windows exe
+
+on:
+  workflow_dispatch: {}
+  push:
+    paths:
+      - 'windows/**'
+      - '.github/workflows/build-windows.yml'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        working-directory: windows
+        run: |
+          pip install -r requirements.txt
+
+      - name: Build exe
+        working-directory: windows
+        run: |
+          pyinstaller SmartSync.spec --clean
+
+      - name: Assemble dist_package
+        run: |
+          mkdir dist_package
+          copy windows\dist\SmartSync.exe dist_package\SmartSync.exe
+          copy SmartSync.html dist_package\SmartSync.html
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SmartSync-dist_package
+          path: dist_package/
+          retention-days: 30
