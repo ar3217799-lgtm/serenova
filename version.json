@@ -1,7 +1,7 @@
 {
-  "version": "2.5.0",
+  "version": "2.6.0",
   "fileUrl": "https://ar3217799-lgtm.github.io/serenova/SmartSync.html",
-  "sha256": "9087a4a505452239b5db958b91450e62f30b7a17d47784be1c726c8086152c02",
-  "releaseNote": "Excel出力をブラウザ標準ダウンロードに変更（保存先はブラウザのダウンロード設定に従う。今後アプリのアップデートだけで挙動を変更可能に）",
+  "sha256": "3f7c5a59f323e7a1c05658f9418dd75bbcd471e2cee1c447101b8b7baa83e8b7",
+  "releaseNote": "「リハビリ時間割」をカルテと矛盾チェックの間に追加。期間指定でExcel出力も可能に",
   "releaseDate": "2026-09-08"
 }

@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.5.0';
+const APP_VERSION = '2.6.0';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -1312,6 +1312,38 @@ const exportKarteXlsx = (karteRecords, targetUsers) => {
   }
   const prefix = users.length === 1 ? `カルテ_${users[0]}` : 'カルテ一括';
   saveXlsxFile(wb, `${prefix}_${today()}.xlsx`);
+};
+
+/* リハビリ時間割の実施記録エクスポート（期間指定・カルテの実績データから生成） */
+const exportRehabScheduleXlsx = (karteRecords, startDate, endDate) => {
+  if (!window.XLSX) {
+    alert('Excelライブラリの読み込み中です。しばらくお待ちください。');
+    return;
+  }
+  const filtered = (karteRecords || []).filter(r => r.rehabCategory && (!startDate || r.date >= startDate) && (!endDate || r.date <= endDate));
+  if (!filtered.length) {
+    alert('指定期間内にリハビリ実施記録がありません。');
+    return;
+  }
+  const sorted = [...filtered].sort((a, b) => a.date.localeCompare(b.date) || (a.rehabTime || '').localeCompare(b.rehabTime || '') || kanaFor(a.userName).localeCompare(kanaFor(b.userName), 'ja'));
+  const wb = XLSX.utils.book_new();
+  const hdrs = ['実施日', '曜日', '時間帯', 'リハビリ区分', '利用者名'];
+  const wsData = [hdrs, ...sorted.map(r => [fmtDate(r.date), r.dayOfWeek || getDOW(r.date), r.rehabTime || '—', r.rehabCategory, r.userName])];
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+  ws['!cols'] = [{
+    wch: 12
+  }, {
+    wch: 6
+  }, {
+    wch: 16
+  }, {
+    wch: 34
+  }, {
+    wch: 14
+  }];
+  XLSX.utils.book_append_sheet(wb, ws, 'リハビリ時間割');
+  const label = startDate && endDate ? `${startDate}_${endDate}` : today();
+  saveXlsxFile(wb, `リハビリ時間割_${label}.xlsx`);
 };
 
 /* 連絡ノート一括エクスポート（月指定・利用者別タブ） */
@@ -4497,6 +4529,8 @@ function RehabSchedule({
   setData
 }) {
   const [activeDay, setActiveDay] = useState('月');
+  const [expStart, setExpStart] = useState(() => today().slice(0, 8) + '01');
+  const [expEnd, setExpEnd] = useState(today());
   const schedule = data.rehabSchedule[activeDay] || TIME_SLOTS.map(t => ({
     time: t,
     category: '',
@@ -4593,8 +4627,50 @@ function RehabSchedule({
   const unassignedUsers = [...dayUsers].filter(u => u.rehabCategory && !assignedUsers.has(u.userName)).sort((a, b) => kanaFor(a.userName).localeCompare(kanaFor(b.userName), 'ja'));
   const noRehabUsers = [...dayUsers].filter(u => !u.rehabCategory).sort((a, b) => kanaFor(a.userName).localeCompare(kanaFor(b.userName), 'ja'));
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    className: "page-title"
-  }, /*#__PURE__*/React.createElement("span", null, "🏃"), "リハビリ時間割"), /*#__PURE__*/React.createElement("div", {
+    className: "page-title",
+    style: {
+      justifyContent: 'space-between'
+    }
+  }, /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("span", null, "🏃"), "リハビリ時間割"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      fontSize: 12,
+      fontWeight: 400
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--text2)'
+    }
+  }, "実施記録の出力期間："), /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    className: "form-input",
+    style: {
+      width: 140,
+      padding: '5px 8px',
+      fontSize: 12
+    },
+    value: expStart,
+    onChange: e => setExpStart(e.target.value)
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--text3)'
+    }
+  }, "〜"), /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    className: "form-input",
+    style: {
+      width: 140,
+      padding: '5px 8px',
+      fontSize: 12
+    },
+    value: expEnd,
+    onChange: e => setExpEnd(e.target.value)
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost btn-sm",
+    onClick: () => exportRehabScheduleXlsx(data.karteRecords, expStart, expEnd)
+  }, "📥 Excel出力"))), /*#__PURE__*/React.createElement("div", {
     className: "card",
     style: {
       marginBottom: 16,
@@ -6426,6 +6502,10 @@ function App() {
     badge: (data.karteRecords || []).length,
     badgeType: 'gold'
   }, {
+    id: 'rehab',
+    icon: '🏃',
+    label: 'リハビリ時間割'
+  }, {
     id: 'check',
     icon: '🔍',
     label: '矛盾チェック',
@@ -6497,6 +6577,9 @@ function App() {
     setData: setData,
     karteTarget: karteTarget,
     clearKarteTarget: () => setKarteTarget(null)
+  }), dispView === 'rehab' && /*#__PURE__*/React.createElement(RehabSchedule, {
+    data: data,
+    setData: setData
   }), dispView === 'check' && /*#__PURE__*/React.createElement(ContradictionPanel, {
     data: data,
     setData: setData,
