@@ -39,7 +39,9 @@ DATA_PATH    = os.path.join(APP_DIR, 'data.json')
 DEVICES_PATH = os.path.join(APP_DIR, 'devices.json')
 CONFIG_PATH  = os.path.join(APP_DIR, 'config.json')
 LICENSE_PATH = os.path.join(APP_DIR, 'license.key')
-BACKUP_DIR   = os.path.join(APP_DIR, '_backups')
+# バックアップはデスクトップ直下に個別ファイルを増やさず、1つのフォルダに
+# まとめる（デスクトップが散らからないようにするため）。
+BACKUP_DIR   = os.path.join(os.path.expanduser('~'), 'Desktop', 'SmartSyncバックアップ')
 LOG_PATH     = os.path.join(APP_DIR, 'smartsync.log')
 
 DEFAULT_PORT = 8765
