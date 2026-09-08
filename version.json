@@ -1,7 +1,7 @@
 {
-  "version": "2.8.0",
+  "version": "2.9.0",
   "fileUrl": "https://ar3217799-lgtm.github.io/serenova/SmartSync.html",
-  "sha256": "7a0113f538e306ca76439098486455cccadb78f60d3c48fb1d34262be2b6c5a2",
-  "releaseNote": "カルテのサービス内容欄にリハビリの実施時間帯を自動表示",
+  "sha256": "d0b3b70c85e52bc4b0557f6d17f5936ebcd25f389755caf77d2dd1c48425f2ad",
+  "releaseNote": "過去カルテへのリハ時間一括反映／利用者編集でふりがな編集・曜日と内容の一括設定に対応",
   "releaseDate": "2026-09-08"
 }

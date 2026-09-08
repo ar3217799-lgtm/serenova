@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.8.0';
+const APP_VERSION = '2.9.0';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -1181,6 +1181,64 @@ const generateKarteRecords = (data, date, entries) => {
       rehabComment: ''
     };
   });
+};
+
+/* 過去のカルテ実績にリハ時間帯が未設定のものへ、一括で自動割り振りする。
+   日付の古い順に処理し、確定させた時間帯を後続レコードの推測にも
+   使うことで、履歴が全く無い状態からでも同区分がまとまっていく。 */
+const backfillRehabTimes = data => {
+  const byDate = {};
+  (data.karteRecords || []).forEach(r => {
+    (byDate[r.date] = byDate[r.date] || []).push(r);
+  });
+  const historySoFar = [];
+  const result = [];
+  Object.keys(byDate).sort().forEach(date => {
+    const dow = getDOW(date);
+    const todaySlots = (data.rehabSchedule[dow] || []).map(s => ({
+      ...s,
+      users: [...s.users]
+    }));
+    const slotCount = {};
+    todaySlots.forEach(s => {
+      slotCount[s.time] = s.users.length;
+    });
+    // 同日内で既にrehabTimeを持つレコード分もカウントしておく（定員超過防止）
+    byDate[date].forEach(r => {
+      if (r.rehabTime) slotCount[r.rehabTime] = (slotCount[r.rehabTime] || 0) + 1;
+    });
+    byDate[date].forEach(r => {
+      if (r.rehabTime || !r.rehabCategory) {
+        result.push(r);
+        historySoFar.push(r);
+        return;
+      }
+      const slot = todaySlots.find(s => s.users.includes(r.userName));
+      let rehabTime = '';
+      if (slot) {
+        rehabTime = slot.time;
+      } else {
+        const inferred = inferRehabTimeFromHistory(historySoFar, r.rehabCategory, r.userName);
+        if (inferred && (slotCount[inferred] || 0) < 5) {
+          rehabTime = inferred;
+        } else {
+          const sameCat = todaySlots.find(s => s.category === r.rehabCategory && (slotCount[s.time] || 0) < 5);
+          const anySlot = todaySlots.find(s => (slotCount[s.time] || 0) < 5);
+          const fb = sameCat || anySlot;
+          if (fb) rehabTime = fb.time;
+        }
+      }
+      if (rehabTime) slotCount[rehabTime] = (slotCount[rehabTime] || 0) + 1;
+      const filled = {
+        ...r,
+        rehabTime,
+        serviceContent: calcServiceContent(r.bath, r.rehabCategory, r.hasRec, rehabTime)
+      };
+      result.push(filled);
+      historySoFar.push(filled);
+    });
+  });
+  return result;
 };
 
 /* ══ Toast 通知システム ══════════════════════════════════════════════════════ */
@@ -2666,6 +2724,36 @@ function UserManagement({
         ...p,
         days: p.days.includes(d) ? p.days.filter(x => x !== d) : [...p.days, d]
       }));
+
+      // 利用曜日・サービス内容（保存時に各曜日マスタへ自動反映する）
+      const [svc, setSvc] = useState(() => {
+        if (!init) return {
+          useDays: [],
+          bath: false,
+          bathMethod: '',
+          toiletAssist: false,
+          rehabCategory: '',
+          scheduleWeeks: [1, 2, 3, 4, 5]
+        };
+        const useDays = DAYS.filter(d => (data.dayMasters[d] || []).some(e => e.userName === init.name));
+        let rep = null;
+        for (const d of useDays) {
+          rep = (data.dayMasters[d] || []).find(e => e.userName === init.name);
+          if (rep) break;
+        }
+        return {
+          useDays,
+          bath: rep?.bath || false,
+          bathMethod: rep?.bathMethod || '',
+          toiletAssist: rep?.toiletAssist || false,
+          rehabCategory: rep?.rehabCategory || '',
+          scheduleWeeks: rep?.scheduleWeeks || [1, 2, 3, 4, 5]
+        };
+      });
+      const toggleUseDay = d => setSvc(p => ({
+        ...p,
+        useDays: p.useDays.includes(d) ? p.useDays.filter(x => x !== d) : [...p.useDays, d]
+      }));
       const addHistory = () => {
         if (!newHist.date) return;
         const entry = {
@@ -2689,12 +2777,15 @@ function UserManagement({
       }));
       const save = () => {
         if (!f.name.trim()) return;
+        const userName = f.name.trim();
+        const oldName = init?.name; // 改名時、旧名で登録済みの曜日マスタを追跡するため
         if (init) {
           setData(p => ({
             ...p,
             users: p.users.map(u => u.id === init.id ? {
               ...u,
-              ...f
+              ...f,
+              name: userName
             } : u)
           }));
         } else {
@@ -2702,10 +2793,40 @@ function UserManagement({
             ...p,
             users: [...p.users, {
               id: uid(),
-              ...f
+              ...f,
+              name: userName
             }]
           }));
         }
+        // 利用曜日・サービス内容を各曜日マスタへ自動反映（選択した曜日は追加/更新、外した曜日は削除）
+        setData(p => {
+          const dm = {
+            ...p.dayMasters
+          };
+          DAYS.forEach(d => {
+            const cur = dm[d] || [];
+            const matchName = oldName || userName;
+            const idx = cur.findIndex(e => e.userName === matchName);
+            if (svc.useDays.includes(d)) {
+              const merged = {
+                ...(idx >= 0 ? cur[idx] : {}),
+                userName,
+                bath: svc.bath,
+                bathMethod: svc.bath ? svc.bathMethod : '',
+                toiletAssist: svc.toiletAssist,
+                rehabCategory: svc.rehabCategory,
+                scheduleWeeks: svc.scheduleWeeks
+              };
+              dm[d] = idx >= 0 ? cur.map((e, i) => i === idx ? merged : e) : [...cur, merged];
+            } else if (idx >= 0) {
+              dm[d] = cur.filter((_, i) => i !== idx);
+            }
+          });
+          return {
+            ...p,
+            dayMasters: dm
+          };
+        });
         onClose();
       };
       return /*#__PURE__*/React.createElement(Modal, {
@@ -2736,9 +2857,19 @@ function UserManagement({
           setF(p => ({...p, kana: kanaAccumRef.current}));
         },
         placeholder: "氏名（日本語入力で変換するとふりがな自動設定）"
-      }), f.kana && /*#__PURE__*/React.createElement("div", {
-        style: {fontSize: 11, color: 'var(--text2)', marginTop: 4}
-      }, "ふりがな：", f.kana)), /*#__PURE__*/React.createElement("div", {
+      })), /*#__PURE__*/React.createElement("div", {
+        className: "form-group",
+        style: {
+          gridColumn: '1/-1'
+        }
+      }, /*#__PURE__*/React.createElement("label", {
+        className: "form-label"
+      }, "ふりがな"), /*#__PURE__*/React.createElement("input", {
+        className: "form-input",
+        value: f.kana || '',
+        onChange: e => setF(p => ({...p, kana: e.target.value, kanaManual: true})),
+        placeholder: "五十音順の並びに使われます（読みが違う場合はここで修正）"
+      })), /*#__PURE__*/React.createElement("div", {
         className: "form-group",
         style: {
           gridColumn: '1/-1'
@@ -2905,6 +3036,116 @@ function UserManagement({
           color: 'var(--text3)'
         }
       }, f.discontinued ? '利用中止中は曜日マスタへの表示・当日入力から除外されます' : '入院中はマスタや矛盾チェックから除外されます')), /*#__PURE__*/React.createElement("div", {
+        style: {
+          border: '1px solid var(--border)',
+          borderRadius: 10,
+          padding: '12px 16px',
+          marginBottom: 14
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 12,
+          fontWeight: 600,
+          color: 'var(--text2)',
+          marginBottom: 10
+        }
+      }, "利用曜日・サービス内容", /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontWeight: 400,
+          color: 'var(--text3)',
+          marginLeft: 6
+        }
+      }, "（保存すると各曜日マスタに自動反映されます）")), /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: 'flex',
+          gap: 6,
+          flexWrap: 'wrap',
+          marginBottom: 12
+        }
+      }, DAYS.map(d => /*#__PURE__*/React.createElement("span", {
+        key: d,
+        onClick: () => toggleUseDay(d),
+        className: `day-tag ${svc.useDays.includes(d) ? 'day-active' : 'day-inactive'}`,
+        style: {
+          width: 36,
+          height: 36,
+          fontSize: 13,
+          cursor: 'pointer'
+        }
+      }, d, "曜日"))), svc.useDays.length > 0 && /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: 'flex',
+          gap: 16,
+          flexWrap: 'wrap',
+          alignItems: 'flex-end'
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "form-group",
+        style: {
+          marginBottom: 0
+        }
+      }, /*#__PURE__*/React.createElement("label", {
+        className: "form-label"
+      }, "入浴"), /*#__PURE__*/React.createElement("select", {
+        className: "form-select",
+        style: {
+          width: 90
+        },
+        value: svc.bath ? '○' : '×',
+        onChange: e => setSvc(p => ({...p, bath: e.target.value === '○'}))
+      }, /*#__PURE__*/React.createElement("option", {value: "×"}, "×"), /*#__PURE__*/React.createElement("option", {value: "○"}, "○"))), svc.bath && /*#__PURE__*/React.createElement("div", {
+        className: "form-group",
+        style: {
+          marginBottom: 0
+        }
+      }, /*#__PURE__*/React.createElement("label", {
+        className: "form-label"
+      }, "入浴方法"), /*#__PURE__*/React.createElement("select", {
+        className: "form-select",
+        style: {
+          width: 140
+        },
+        value: svc.bathMethod,
+        onChange: e => setSvc(p => ({...p, bathMethod: e.target.value}))
+      }, /*#__PURE__*/React.createElement("option", {value: ""}, "選択"), BATH_METHODS.map(m => /*#__PURE__*/React.createElement("option", {
+        key: m,
+        value: m
+      }, m)))), /*#__PURE__*/React.createElement("div", {
+        className: "form-group",
+        style: {
+          marginBottom: 0
+        }
+      }, /*#__PURE__*/React.createElement("label", {
+        className: "form-label"
+      }, "排泄援助"), /*#__PURE__*/React.createElement("select", {
+        className: "form-select",
+        style: {
+          width: 90
+        },
+        value: svc.toiletAssist ? '○' : '×',
+        onChange: e => setSvc(p => ({...p, toiletAssist: e.target.value === '○'}))
+      }, /*#__PURE__*/React.createElement("option", {value: "×"}, "×"), /*#__PURE__*/React.createElement("option", {value: "○"}, "○"))), /*#__PURE__*/React.createElement("div", {
+        className: "form-group",
+        style: {
+          marginBottom: 0,
+          flex: 1,
+          minWidth: 200
+        }
+      }, /*#__PURE__*/React.createElement("label", {
+        className: "form-label"
+      }, "リハビリ区分"), /*#__PURE__*/React.createElement("select", {
+        className: "form-select",
+        value: svc.rehabCategory,
+        onChange: e => setSvc(p => ({...p, rehabCategory: e.target.value}))
+      }, /*#__PURE__*/React.createElement("option", {value: ""}, "選択してください"), REHAB_CATS.map(c => /*#__PURE__*/React.createElement("option", {
+        key: c,
+        value: c
+      }, c))))), svc.useDays.length === 0 && /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 11,
+          color: 'var(--text3)'
+        }
+      }, "曜日を選択すると、入浴・リハビリ区分などを設定できます。")), /*#__PURE__*/React.createElement("div", {
         style: {
           border: '1px solid var(--border)',
           borderRadius: 10,
@@ -4656,6 +4897,19 @@ function RehabSchedule({
       }))
     }
   }));
+  const runBackfill = () => {
+    const target = (data.karteRecords || []).filter(r => r.rehabCategory && !r.rehabTime);
+    if (!target.length) {
+      showToast('リハ時間帯が未設定のカルテはありません', 'ok');
+      return;
+    }
+    if (!window.confirm(`過去のカルテ ${target.length}件にリハビリ時間帯が未設定です。\n実績・時間割から自動で割り振って保存しますか？`)) return;
+    setData(p => ({
+      ...p,
+      karteRecords: backfillRehabTimes(p)
+    }));
+    showToast(`${target.length}件のカルテに時間帯を割り振りました`, 'ok');
+  };
   const assignedUsers = new Set(schedule.flatMap(s => s.users));
   const unassignedUsers = [...dayUsers].filter(u => u.rehabCategory && !assignedUsers.has(u.userName)).sort((a, b) => kanaFor(a.userName).localeCompare(kanaFor(b.userName), 'ja'));
   const noRehabUsers = [...dayUsers].filter(u => !u.rehabCategory).sort((a, b) => kanaFor(a.userName).localeCompare(kanaFor(b.userName), 'ja'));
@@ -4703,7 +4957,11 @@ function RehabSchedule({
   }), /*#__PURE__*/React.createElement("button", {
     className: "btn btn-ghost btn-sm",
     onClick: () => exportRehabScheduleXlsx(data.karteRecords, expStart, expEnd)
-  }, "📥 Excel出力"))), /*#__PURE__*/React.createElement("div", {
+  }, "📥 Excel出力"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost btn-sm",
+    onClick: runBackfill,
+    title: "リハ時間帯が未設定の過去のカルテに、実績・時間割から自動で割り振ります"
+  }, "🔄 過去分に一括反映"))), /*#__PURE__*/React.createElement("div", {
     className: "card",
     style: {
       marginBottom: 16,
