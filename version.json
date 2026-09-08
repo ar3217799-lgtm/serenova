@@ -1,7 +1,7 @@
 {
-  "version": "2.9.0",
+  "version": "2.9.1",
   "fileUrl": "https://ar3217799-lgtm.github.io/serenova/SmartSync.html",
-  "sha256": "d0b3b70c85e52bc4b0557f6d17f5936ebcd25f389755caf77d2dd1c48425f2ad",
-  "releaseNote": "過去カルテへのリハ時間一括反映／利用者編集でふりがな編集・曜日と内容の一括設定に対応",
+  "sha256": "8ec2ecc1c70701da7e055438e90b3bc0339bd822986621fdce3abbd47547de8d",
+  "releaseNote": "矛盾チェックの確認事項(info)はナビの赤バッジに数えないよう修正",
   "releaseDate": "2026-09-08"
 }

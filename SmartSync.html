@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.9.0';
+const APP_VERSION = '2.9.1';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -6765,7 +6765,8 @@ function App() {
   }, []);
   const issues = useMemo(() => checkContradictions(data), [data]);
   const errCnt = issues.filter(i => i.type === 'error').length;
-  const warnCnt = issues.filter(i => i.type !== 'error').length;
+  // 確認事項(info)はナビの赤バッジには数えない（開けば内容は表示される）
+  const warnCnt = issues.filter(i => i.type === 'warning').length;
   const NAV = [{
     id: 'dashboard',
     icon: '⚡',
