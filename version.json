@@ -1,7 +1,7 @@
 {
-  "version": "2.3.0",
+  "version": "2.4.0",
   "fileUrl": "https://ar3217799-lgtm.github.io/serenova/SmartSync.html",
-  "sha256": "56a9814d00827f06d1e742149cf4cdf15f61a989f68dd2a29f4e1a753f580965",
-  "releaseNote": "施設内でのデータ共有・端末管理機能を追加（要: 新しいSmartSync.exeへの入れ替え）",
+  "sha256": "43139357aa10db573b11f4dd8b54b261cb902688a448f46162cbb497b2e4ebda",
+  "releaseNote": "連絡ノートに「リハ」区分を追加。リハ休止の連絡とカルテのリハ記載の矛盾をチェックできるように",
   "releaseDate": "2026-09-06"
 }
