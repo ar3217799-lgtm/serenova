@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.7.0';
+const APP_VERSION = '2.8.0';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -1071,12 +1071,13 @@ const calcHasRec = (baseDate, targetDate) => {
   const tMon = new Date(t.getTime() - ((t.getDay() || 7) - 1) * 86400000);
   return Math.round((tMon - bMon) / 604800000) % 2 === 0;
 };
-const calcServiceContent = (bath, rehabCategory, hasRec) => {
+const calcServiceContent = (bath, rehabCategory, hasRec, rehabTime) => {
   const r = !!rehabCategory;
-  if (r && bath && hasRec) return 'リハ・入浴・レク';
-  if (r && bath && !hasRec) return 'リハ・入浴';
-  if (r && !bath && hasRec) return 'リハ・レク';
-  if (r && !bath && !hasRec) return 'リハ';
+  const rehabLabel = r && rehabTime ? `リハ(${rehabTime})` : 'リハ';
+  if (r && bath && hasRec) return `${rehabLabel}・入浴・レク`;
+  if (r && bath && !hasRec) return `${rehabLabel}・入浴`;
+  if (r && !bath && hasRec) return `${rehabLabel}・レク`;
+  if (r && !bath && !hasRec) return rehabLabel;
   if (!r && bath && hasRec) return '入浴・レク';
   if (!r && bath && !hasRec) return '入浴';
   if (!r && !bath && hasRec) return 'レク';
@@ -1175,7 +1176,7 @@ const generateKarteRecords = (data, date, entries) => {
       rehabCategory,
       rehabTime,
       hasRec,
-      serviceContent: calcServiceContent(bath, rehabCategory, hasRec),
+      serviceContent: calcServiceContent(bath, rehabCategory, hasRec, rehabTime),
       careComment: '',
       rehabComment: ''
     };
@@ -1668,7 +1669,7 @@ function Dashboard({
         ...r,
         bath: false,
         bathMethod: '',
-        serviceContent: calcServiceContent(false, r.rehabCategory, r.hasRec)
+        serviceContent: calcServiceContent(false, r.rehabCategory, r.hasRec, r.rehabTime)
       } : r),
       dailyAttendance: p.dailyAttendance.map(att => att.date !== date ? att : {
         ...att,
@@ -4969,7 +4970,7 @@ function KarteEditModal({
     bath: val,
     bathMethod: val ? p.bathMethod : ''
   }));
-  const svcContent = calcServiceContent(v.bath, v.rehabCategory, v.hasRec);
+  const svcContent = calcServiceContent(v.bath, v.rehabCategory, v.hasRec, v.rehabTime);
   const SvcTag = ({
     val
   }) => {
@@ -5294,7 +5295,7 @@ function Karte({
         ...r,
         bath: false,
         bathMethod: '',
-        serviceContent: calcServiceContent(false, r.rehabCategory, r.hasRec)
+        serviceContent: calcServiceContent(false, r.rehabCategory, r.hasRec, r.rehabTime)
       } : r),
       dailyAttendance: p.dailyAttendance.map(att => att.date !== date ? att : {
         ...att,
@@ -5891,7 +5892,7 @@ function ContradictionPanel({
           ...r,
           bath: false,
           bathMethod: '',
-          serviceContent: calcServiceContent(false, r.rehabCategory, r.hasRec)
+          serviceContent: calcServiceContent(false, r.rehabCategory, r.hasRec, r.rehabTime)
         } : r),
         dailyAttendance: p.dailyAttendance.map(att => att.date !== iss.date ? att : {
           ...att,
@@ -5999,7 +6000,7 @@ function ContradictionPanel({
         ...r,
         bath: false,
         bathMethod: '',
-        serviceContent: calcServiceContent(false, r.rehabCategory, r.hasRec)
+        serviceContent: calcServiceContent(false, r.rehabCategory, r.hasRec, r.rehabTime)
       } : r),
       dailyAttendance: p.dailyAttendance.map(att => att.date !== date ? att : {
         ...att,
