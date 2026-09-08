@@ -1,7 +1,7 @@
 {
-  "version": "2.4.1",
+  "version": "2.4.2",
   "fileUrl": "https://ar3217799-lgtm.github.io/serenova/SmartSync.html",
-  "sha256": "5ec2221c6fe5f0275bcb5e83d48e9b0071488d2323f8fd10c58843e0073bf2fa",
-  "releaseNote": "「リハ非実施」の矛盾検知が反応しない不具合を修正",
+  "sha256": "5c6e3db4c6c04532eaccedc5547f4dd221236e4ded04813fb13285fece687ee2",
+  "releaseNote": "カルテ・連絡ノートのExcel出力が「失敗」と誤表示される不具合を修正",
   "releaseDate": "2026-09-08"
 }

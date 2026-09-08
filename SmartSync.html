@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.4.1';
+const APP_VERSION = '2.4.2';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -1174,7 +1174,17 @@ const saveXlsxFile = (wb, filename) => {
       type: 'base64'
     });
     window.pywebview.api.save_excel(filename, b64).then(res => {
-      if (res.ok) showToast(`保存しました — ${filename}`, 'ok');else showToast('保存に失敗しました：' + res.error, 'err');
+      // exeのバージョンにより戻り値の形が異なる（新: {ok,error} ／
+      // 旧: 成功時は保存パスの文字列、失敗時は null）ため両対応する
+      const ok = res && typeof res === 'object' ? !!res.ok : !!res;
+      if (ok) {
+        showToast(`保存しました — ${filename}`, 'ok');
+      } else {
+        const errMsg = res && typeof res === 'object' && res.error ? res.error : '原因不明のエラー';
+        showToast('保存に失敗しました：' + errMsg, 'err');
+      }
+    }).catch(err => {
+      showToast('保存に失敗しました：' + (err && err.message || err), 'err');
     });
   } else {
     XLSX.writeFile(wb, filename);
