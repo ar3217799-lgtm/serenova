@@ -1,7 +1,7 @@
 {
-  "version": "2.4.2",
+  "version": "2.5.0",
   "fileUrl": "https://ar3217799-lgtm.github.io/serenova/SmartSync.html",
-  "sha256": "5c6e3db4c6c04532eaccedc5547f4dd221236e4ded04813fb13285fece687ee2",
-  "releaseNote": "カルテ・連絡ノートのExcel出力が「失敗」と誤表示される不具合を修正",
+  "sha256": "9087a4a505452239b5db958b91450e62f30b7a17d47784be1c726c8086152c02",
+  "releaseNote": "Excel出力をブラウザ標準ダウンロードに変更（保存先はブラウザのダウンロード設定に従う。今後アプリのアップデートだけで挙動を変更可能に）",
   "releaseDate": "2026-09-08"
 }

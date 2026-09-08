@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.4.2';
+const APP_VERSION = '2.5.0';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -1162,33 +1162,40 @@ function showToast(msg, type = 'ok') {
 
 /* ══ Excel エクスポート ═════════════════════════════════════════════════════ */
 
-/* pywebview では XLSX.writeFile が動作しないため、Python API 経由で保存する */
+/* ブラウザ標準のダウンロード機能で保存する（保存先はブラウザの
+   ダウンロード設定に従う＝通常は「ダウンロード」フォルダ）。
+   exe（Python側）を経由しないため、保存先や挙動を変えたい場合も
+   このHTMLの更新だけで済み、アプリの自動アップデートで配信できる。 */
 const saveXlsxFile = (wb, filename) => {
   if (!window.XLSX) {
     showToast('Excelライブラリ読み込み中です。しばらくお待ちください。', 'warn');
     return;
   }
-  if (window.pywebview && window.pywebview.api) {
-    const b64 = XLSX.write(wb, {
-      bookType: 'xlsx',
-      type: 'base64'
-    });
-    window.pywebview.api.save_excel(filename, b64).then(res => {
-      // exeのバージョンにより戻り値の形が異なる（新: {ok,error} ／
-      // 旧: 成功時は保存パスの文字列、失敗時は null）ため両対応する
-      const ok = res && typeof res === 'object' ? !!res.ok : !!res;
-      if (ok) {
-        showToast(`保存しました — ${filename}`, 'ok');
-      } else {
-        const errMsg = res && typeof res === 'object' && res.error ? res.error : '原因不明のエラー';
-        showToast('保存に失敗しました：' + errMsg, 'err');
-      }
-    }).catch(err => {
-      showToast('保存に失敗しました：' + (err && err.message || err), 'err');
-    });
-  } else {
+  try {
     XLSX.writeFile(wb, filename);
     showToast(`ダウンロード完了 — ${filename}`, 'ok');
+  } catch (err) {
+    // 一部環境向けの保険（Blobで手動ダウンロードを組み立てる）
+    try {
+      const wbout = XLSX.write(wb, {
+        bookType: 'xlsx',
+        type: 'array'
+      });
+      const blob = new Blob([wbout], {
+        type: 'application/octet-stream'
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      showToast(`ダウンロード完了 — ${filename}`, 'ok');
+    } catch (err2) {
+      showToast('保存に失敗しました：' + (err2 && err2.message || err2), 'err');
+    }
   }
 };
 const exportChangeRecordXlsx = (userName, notes) => {
