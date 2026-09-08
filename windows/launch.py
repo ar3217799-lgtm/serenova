@@ -292,8 +292,9 @@ def api_save_data(json_str, base_rev):
 
 def save_excel(filename, b64data):
     try:
-        desktop = os.path.join(os.path.expanduser('~'), 'Desktop')
-        out = os.path.join(desktop, os.path.basename(filename))
+        downloads = os.path.join(os.path.expanduser('~'), 'Downloads')
+        os.makedirs(downloads, exist_ok=True)
+        out = os.path.join(downloads, os.path.basename(filename))
         with open(out, 'wb') as f:
             f.write(base64.b64decode(b64data))
         return {'ok': True, 'path': out}
