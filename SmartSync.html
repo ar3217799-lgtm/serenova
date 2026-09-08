@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.6.0';
+const APP_VERSION = '2.7.0';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -1082,22 +1082,43 @@ const calcServiceContent = (bath, rehabCategory, hasRec) => {
   if (!r && !bath && hasRec) return 'レク';
   return 'デイサービス';
 };
+/* 過去のカルテ実績から、その区分で最も使われている時間帯を学習する。
+   本人の実績を優先し、無ければ他の利用者の実績から推測する（同区分は
+   同じ時間帯にまとまる傾向を再現するため）。 */
+const inferRehabTimeFromHistory = (karteRecords, rehabCategory, userName) => {
+  if (!rehabCategory) return '';
+  const mostFrequent = list => {
+    if (!list.length) return '';
+    const freq = {};
+    list.forEach(r => {
+      freq[r.rehabTime] = (freq[r.rehabTime] || 0) + 1;
+    });
+    return Object.entries(freq).sort((a, b) => b[1] - a[1])[0][0];
+  };
+  const recs = karteRecords || [];
+  const own = recs.filter(r => r.userName === userName && r.rehabCategory === rehabCategory && r.rehabTime);
+  const ownSlot = mostFrequent(own);
+  if (ownSlot) return ownSlot;
+  const anyone = recs.filter(r => r.rehabCategory === rehabCategory && r.rehabTime);
+  return mostFrequent(anyone);
+};
+
 const generateKarteRecords = (data, date, entries) => {
   const dow = getDOW(date);
   const hasRec = calcHasRec(data.recBaseDate || '2026-04-27', date);
   const valid = entries.filter(e => e.userName);
 
-  // 当日の時間割スロットごとの空き人数をトラッキング（振替者の割り振りに使う）
+  // 当日の時間割スロットごとの空き人数をトラッキング（振替者・自動推測分の割り振りに使う）
   const todaySlots = (data.rehabSchedule[dow] || []).map(s => ({
     ...s,
     users: [...s.users]
   }));
-  const slotCount = {}; // time → 現在の人数（通常来所者 + 振替配置済み）
+  const slotCount = {}; // time → 現在の人数（通常来所者 + 振替・自動推測配置済み）
   todaySlots.forEach(s => {
     slotCount[s.time] = s.users.length;
   });
 
-  // 振替者に当日スロットを割り当てる（同区分優先・5名上限）
+  // 空きスロットへ割り当てる（同区分優先・5名上限）
   const assignSubstituteSlot = rehabCategory => {
     if (!rehabCategory) return '';
     // ① 同区分 & 空きあり
@@ -1124,9 +1145,20 @@ const generateKarteRecords = (data, date, entries) => {
     const rehabCategory = entry.rehabCategory ?? dm?.rehabCategory ?? '';
     let rehabTime = '';
     if (!entry.substituteDay) {
-      // 通常来所：当日の時間割から名前を検索
+      // 通常来所：まず手動設定済みの時間割から検索
       const slot = todaySlots.find(s => s.users.includes(entry.userName));
-      rehabTime = slot?.time || '';
+      if (slot) {
+        rehabTime = slot.time;
+      } else if (rehabCategory) {
+        // 時間割が未設定でも、過去のカルテ実績から時間帯を自動推測する
+        const inferred = inferRehabTimeFromHistory(data.karteRecords, rehabCategory, entry.userName);
+        if (inferred && (slotCount[inferred] || 0) < 5) {
+          slotCount[inferred] = (slotCount[inferred] || 0) + 1;
+          rehabTime = inferred;
+        } else {
+          rehabTime = assignSubstituteSlot(rehabCategory);
+        }
+      }
     } else {
       // 振替来所：当日スロットの空きを確認して自動割り当て
       rehabTime = assignSubstituteSlot(rehabCategory);

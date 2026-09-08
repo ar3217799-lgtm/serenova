@@ -1,7 +1,7 @@
 {
-  "version": "2.6.0",
+  "version": "2.7.0",
   "fileUrl": "https://ar3217799-lgtm.github.io/serenova/SmartSync.html",
-  "sha256": "3f7c5a59f323e7a1c05658f9418dd75bbcd471e2cee1c447101b8b7baa83e8b7",
-  "releaseNote": "「リハビリ時間割」をカルテと矛盾チェックの間に追加。期間指定でExcel出力も可能に",
+  "sha256": "86458feaa1b9586a7d1349662b64ad83f5e058adeed53b23a0b9c5b9510da3c0",
+  "releaseNote": "カルテ生成時にリハビリ時間帯を過去実績から自動推測。手動での時間割設定が不要に",
   "releaseDate": "2026-09-08"
 }
