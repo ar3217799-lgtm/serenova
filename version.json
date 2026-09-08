@@ -1,7 +1,7 @@
 {
-  "version": "2.4.0",
+  "version": "2.4.1",
   "fileUrl": "https://ar3217799-lgtm.github.io/serenova/SmartSync.html",
-  "sha256": "43139357aa10db573b11f4dd8b54b261cb902688a448f46162cbb497b2e4ebda",
-  "releaseNote": "連絡ノートに「リハ」区分を追加。リハ休止の連絡とカルテのリハ記載の矛盾をチェックできるように",
-  "releaseDate": "2026-09-06"
+  "sha256": "5ec2221c6fe5f0275bcb5e83d48e9b0071488d2323f8fd10c58843e0073bf2fa",
+  "releaseNote": "「リハ非実施」の矛盾検知が反応しない不具合を修正",
+  "releaseDate": "2026-09-08"
 }

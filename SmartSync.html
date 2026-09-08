@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.4.0';
+const APP_VERSION = '2.4.1';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -881,7 +881,7 @@ const DAYS = ['月', '火', '水', '金', '土'];
 const BATH_METHODS = ['大浴場', '特殊浴', '個室浴', 'シャワー浴'];
 const REHAB_CATS = ['①座位・立位訓練・ADL・IADL訓練', '②立位・起立・移動・ADL・IADL訓練', '③移動訓練・ADL・IADL訓練', '④認知機能・ADL・IADL訓練', '⑤趣味・社会参加訓練'];
 const CONTACT_CATS = ['休み', '振替', '時間短縮', '送迎減算', '入浴', 'リハ', 'その他'];
-const TEMPLATES = ['お休みのご連絡をいただきました。', 'ご体調不良のためお休みとのご連絡をいただきました。', '発熱のためお休みとのご連絡をいただきました。', '受診のためお休みとのご連絡をいただきました。', '入院のためお休みとのご連絡をいただきました。', '家族のご都合によりお休みとのご連絡をいただきました。', '振替希望のご連絡をいただきました。', '時間短縮のご連絡をいただきました。', '送迎不要のご連絡をいただきました。', '本人希望により入浴非実施', '退院されました。', 'その他（詳細は備考欄参照）'];
+const TEMPLATES = ['お休みのご連絡をいただきました。', 'ご体調不良のためお休みとのご連絡をいただきました。', '発熱のためお休みとのご連絡をいただきました。', '受診のためお休みとのご連絡をいただきました。', '入院のためお休みとのご連絡をいただきました。', '家族のご都合によりお休みとのご連絡をいただきました。', '振替希望のご連絡をいただきました。', '時間短縮のご連絡をいただきました。', '送迎不要のご連絡をいただきました。', '本人希望により入浴非実施', '本人希望によりリハ非実施', '退院されました。', 'その他（詳細は備考欄参照）'];
 const TIME_SLOTS = ['10:00〜10:15', '10:15〜10:30', '10:30〜10:45', '10:45〜11:00', '11:00〜11:15', '11:15〜11:30', '11:30〜11:45', '11:45〜12:00'];
 const DAY_NAMES = {
   月: '月曜日',
@@ -1496,7 +1496,7 @@ function checkContradictions(data) {
   });
 
   /* 6. リハ休止の連絡 ↔ カルテにリハビリ実施記録あり（同一人物・同一日） */
-  const isNoRehabNote = n => n.category === 'リハ' && ['休止', '休み', '実施なし', '中止', 'なし'].some(k => (n.details || '').includes(k));
+  const isNoRehabNote = n => n.category === 'リハ' && ['非実施', '実施なし', '休止', '休み', '中止', 'なし'].some(k => (n.details || '').includes(k));
   data.contactNotes.forEach(note => {
     if (!isNoRehabNote(note) || !note.targetDate) return;
     const karte = (data.karteRecords || []).find(k => k.date === note.targetDate && k.userName === note.userName);
@@ -6124,7 +6124,7 @@ function ContradictionPanel({
     style: {
       color: 'var(--err)'
     }
-  }, "🚨 エラー："), "① 休み連絡あり → カルテが存在する\u3000② 入浴非実施の連絡あり → カルテに入浴記録あり", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("b", {
+  }, "🚨 エラー："), "① 休み連絡あり → カルテが存在する\u3000② 入浴非実施の連絡あり → カルテに入浴記録あり\u3000③ リハ非実施の連絡あり → カルテにリハ記録あり", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("b", {
     style: {
       color: 'var(--warn)'
     }
