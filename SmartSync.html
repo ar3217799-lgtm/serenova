@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.10.0';
+const APP_VERSION = '2.11.0';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -1660,10 +1660,10 @@ function checkContradictions(data) {
     }
   });
 
-  /* 7. 入院中の利用者にカルテが存在する（入院日以降） */
+  /* 7. 入院中の利用者にカルテが存在する（入院日〜退院日、退院日未定なら期限なし） */
   data.users.forEach(u => {
     if (!u.hospitalized || !u.hospitalizedSince) return;
-    (data.karteRecords || []).filter(k => k.userName === u.name && k.date >= u.hospitalizedSince).forEach(k => {
+    (data.karteRecords || []).filter(k => k.userName === u.name && k.date >= u.hospitalizedSince && (!u.dischargedDate || k.date <= u.dischargedDate)).forEach(k => {
       const att = data.dailyAttendance.find(a => a.date === k.date);
       const attExists = !!(att && att.entries.some(e => e.userName === u.name));
       issues.push({
@@ -1673,7 +1673,7 @@ function checkContradictions(data) {
         userName: u.name,
         date: k.date,
         canRemoveAttendance: attExists,
-        message: `【矛盾】${u.name} さん — ${fmtDate(k.date)} : 入院中（${fmtDate(u.hospitalizedSince)}〜）のはずですがカルテが存在します。`,
+        message: `【矛盾】${u.name} さん — ${fmtDate(k.date)} : 入院中（${fmtDate(u.hospitalizedSince)}〜${u.dischargedDate ? fmtDate(u.dischargedDate) : ''}）のはずですがカルテが存在します。`,
         detail: `解消: 右の「🗑️ カルテを削除」ボタンで削除するか、利用者管理で入院設定を確認してください。`
       });
     });
@@ -2736,6 +2736,7 @@ function UserManagement({
         notes: '',
         hospitalized: false,
         hospitalizedSince: '',
+        dischargedDate: '',
         discontinued: false,
         discontinuedSince: '',
         dayHistory: []
@@ -2805,9 +2806,8 @@ function UserManagement({
         if (!f.name.trim()) return;
         const userName = f.name.trim();
         const oldName = init?.name; // 改名時、旧名で登録済みの曜日マスタを追跡するため
-        // 新たに入院中になった（未入院→入院、または入院日を修正）場合のみ、
-        // 連絡ノートへ自動でお休みの記録を追加する（毎回の保存で重複させない）
-        const justHospitalized = f.hospitalized && (!init?.hospitalized || init.hospitalizedSince !== f.hospitalizedSince);
+        // 入院中の連絡ノートは、保存後にApp側のuseEffectが利用予定日ごとに
+        // 自動で積み増す（ここでは何もしない。退院日が入るまで日付が経つほど増える）
         if (init) {
           setData(p => ({
             ...p,
@@ -2856,21 +2856,6 @@ function UserManagement({
             dayMasters: dm
           };
         });
-        if (justHospitalized) {
-          setData(p => ({
-            ...p,
-            contactNotes: [...p.contactNotes, {
-              id: uid(),
-              recordDate: today(),
-              userName,
-              contactFrom: '',
-              targetDate: f.hospitalizedSince || today(),
-              category: '休み',
-              details: '入院中のためお休みです',
-              reporter: ''
-            }]
-          }));
-        }
         onClose();
       };
       return /*#__PURE__*/React.createElement(Modal, {
@@ -3012,7 +2997,30 @@ function UserManagement({
           ...p,
           hospitalizedSince: e.target.value
         }))
-      }))), /*#__PURE__*/React.createElement("div", {
+      }), /*#__PURE__*/React.createElement("div", {
+        style: {
+          marginTop: 8
+        }
+      }, /*#__PURE__*/React.createElement("label", {
+        className: "form-label"
+      }, "退院日（決まったら入力）"), /*#__PURE__*/React.createElement("input", {
+        type: "date",
+        className: "form-input",
+        style: {
+          maxWidth: 180
+        },
+        value: f.dischargedDate || '',
+        onChange: e => setF(p => ({
+          ...p,
+          dischargedDate: e.target.value
+        }))
+      }), /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 11,
+          color: 'var(--text3)',
+          marginTop: 4
+        }
+      }, "退院日を入力するまで、利用予定日ごとに連絡ノートへ自動でお休みの記録が積み増されます。")))), /*#__PURE__*/React.createElement("div", {
         style: {
           flex: 1,
           minWidth: 200,
@@ -6704,6 +6712,48 @@ function App() {
       }));
     }
   }, [data.users.map(u => (u.id || '') + (u.name || '')).join(',')]);
+
+  // 入院中の利用者は、退院日が入るまで利用予定日ごとに連絡ノートへ
+  // 「休み」記録を自動で積み増す（日付が経つほど、開くたびに追いつく）
+  useEffect(() => {
+    const hospitalizedUsers = data.users.filter(u => u.hospitalized && u.hospitalizedSince);
+    if (!hospitalizedUsers.length) return;
+    const todayStr = today();
+    const newNotes = [];
+    hospitalizedUsers.forEach(u => {
+      const endDate = u.dischargedDate && u.dischargedDate < todayStr ? u.dischargedDate : todayStr;
+      if (endDate < u.hospitalizedSince) return;
+      const registeredDays = DAYS.filter(d => (data.dayMasters[d] || []).some(dm => dm.userName === u.name));
+      if (!registeredDays.length) return;
+      let cur = new Date(u.hospitalizedSince + 'T00:00:00');
+      const end = new Date(endDate + 'T00:00:00');
+      while (cur <= end) {
+        const dateStr = cur.toISOString().slice(0, 10);
+        if (registeredDays.includes(getDOW(dateStr))) {
+          const exists = data.contactNotes.some(n => n.userName === u.name && n.targetDate === dateStr && n.category === '休み');
+          if (!exists) {
+            newNotes.push({
+              id: uid(),
+              recordDate: todayStr,
+              userName: u.name,
+              contactFrom: '',
+              targetDate: dateStr,
+              category: '休み',
+              details: '入院中のためお休みです',
+              reporter: ''
+            });
+          }
+        }
+        cur.setDate(cur.getDate() + 1);
+      }
+    });
+    if (newNotes.length) {
+      setData(p => ({
+        ...p,
+        contactNotes: [...p.contactNotes, ...newNotes]
+      }));
+    }
+  }, [data.users.map(u => `${u.id}:${u.hospitalized}:${u.hospitalizedSince}:${u.dischargedDate}`).join(','), JSON.stringify(data.dayMasters)]);
 
   // トースト登録 → モジュールレベル関数からアクセス可能にする
   useEffect(() => {

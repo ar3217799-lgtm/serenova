@@ -1,7 +1,7 @@
 {
-  "version": "2.10.0",
+  "version": "2.11.0",
   "fileUrl": "https://ar3217799-lgtm.github.io/serenova/SmartSync.html",
-  "sha256": "224dbfd5544550b46c96c0bdf0c0b0facf211fb3d430e1d12c9d4dcfd63f5234",
-  "releaseNote": "入院設定時に連絡ノートを自動生成。入院中の利用者にカルテがあれば矛盾チェックでアラート",
+  "sha256": "af142eeebd3e8afb144f13a78ef89d8450b43a5685d2fa94fd8331f51b864ae8",
+  "releaseNote": "退院日を追加。入院中は利用予定日ごとに連絡ノートを自動で積み増すように",
   "releaseDate": "2026-09-18"
 }
