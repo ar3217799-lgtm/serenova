@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.9.2';
+const APP_VERSION = '2.10.0';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -1658,6 +1658,25 @@ function checkContradictions(data) {
         detail: `連絡内容: ${(note.details || '').slice(0, 40)} ／ 解消: 右の「🏃 リハを修正」ボタン or 連絡ノートを削除`
       });
     }
+  });
+
+  /* 7. 入院中の利用者にカルテが存在する（入院日以降） */
+  data.users.forEach(u => {
+    if (!u.hospitalized || !u.hospitalizedSince) return;
+    (data.karteRecords || []).filter(k => k.userName === u.name && k.date >= u.hospitalizedSince).forEach(k => {
+      const att = data.dailyAttendance.find(a => a.date === k.date);
+      const attExists = !!(att && att.entries.some(e => e.userName === u.name));
+      issues.push({
+        type: 'error',
+        fix: 'karte',
+        fixType: 'delete_karte',
+        userName: u.name,
+        date: k.date,
+        canRemoveAttendance: attExists,
+        message: `【矛盾】${u.name} さん — ${fmtDate(k.date)} : 入院中（${fmtDate(u.hospitalizedSince)}〜）のはずですがカルテが存在します。`,
+        detail: `解消: 右の「🗑️ カルテを削除」ボタンで削除するか、利用者管理で入院設定を確認してください。`
+      });
+    });
   });
   return issues;
 }
@@ -2786,6 +2805,9 @@ function UserManagement({
         if (!f.name.trim()) return;
         const userName = f.name.trim();
         const oldName = init?.name; // 改名時、旧名で登録済みの曜日マスタを追跡するため
+        // 新たに入院中になった（未入院→入院、または入院日を修正）場合のみ、
+        // 連絡ノートへ自動でお休みの記録を追加する（毎回の保存で重複させない）
+        const justHospitalized = f.hospitalized && (!init?.hospitalized || init.hospitalizedSince !== f.hospitalizedSince);
         if (init) {
           setData(p => ({
             ...p,
@@ -2834,6 +2856,21 @@ function UserManagement({
             dayMasters: dm
           };
         });
+        if (justHospitalized) {
+          setData(p => ({
+            ...p,
+            contactNotes: [...p.contactNotes, {
+              id: uid(),
+              recordDate: today(),
+              userName,
+              contactFrom: '',
+              targetDate: f.hospitalizedSince || today(),
+              category: '休み',
+              details: '入院中のためお休みです',
+              reporter: ''
+            }]
+          }));
+        }
         onClose();
       };
       return /*#__PURE__*/React.createElement(Modal, {

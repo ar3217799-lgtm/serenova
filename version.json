@@ -1,7 +1,7 @@
 {
-  "version": "2.9.2",
+  "version": "2.10.0",
   "fileUrl": "https://ar3217799-lgtm.github.io/serenova/SmartSync.html",
-  "sha256": "5c1655ff0828e20183658fe4a3312ea23f2e1751603e356fec6bda873e0f7a63",
-  "releaseNote": "重要な修正：複数端末で同時に保存すると入力内容が消える不具合を修正",
+  "sha256": "224dbfd5544550b46c96c0bdf0c0b0facf211fb3d430e1d12c9d4dcfd63f5234",
+  "releaseNote": "入院設定時に連絡ノートを自動生成。入院中の利用者にカルテがあれば矛盾チェックでアラート",
   "releaseDate": "2026-09-18"
 }
