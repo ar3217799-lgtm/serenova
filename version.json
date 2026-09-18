@@ -1,7 +1,7 @@
 {
-  "version": "2.11.0",
+  "version": "2.11.1",
   "fileUrl": "https://ar3217799-lgtm.github.io/serenova/SmartSync.html",
-  "sha256": "af142eeebd3e8afb144f13a78ef89d8450b43a5685d2fa94fd8331f51b864ae8",
-  "releaseNote": "退院日を追加。入院中は利用予定日ごとに連絡ノートを自動で積み増すように",
+  "sha256": "9e6e934baa52c1a3f4ce990eede63e9b08aa78f60c39312d24e38bb30ea1ae4a",
+  "releaseNote": "退院日を過ぎたら表示を通所中に戻すよう修正。保存中に更新・他端末反映が重なって連絡ノートの入力が消えることがある不具合を修正",
   "releaseDate": "2026-09-18"
 }

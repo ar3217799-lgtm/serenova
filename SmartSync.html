@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.11.0';
+const APP_VERSION = '2.11.1';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -852,6 +852,9 @@ async function downloadUpdate(info, setProgress) {
     // ── PyWebView モード：Python API 経由でファイル更新 ──
     if (window.pywebview?.api?.update_app) {
       setProgress('applying');
+      // 連絡ノートなどの保存がまだサーバーへ届いていない（競合による再試行中を含む）
+      // 状態でリロードすると、その入力内容が未保存のまま消えてしまうため待ち合わせる。
+      await waitForPendingSaves();
       const ok = await window.pywebview.api.update_app(html, APP_VERSION, info.version);
       if (!ok) throw new Error('ファイル書き込み失敗');
       localStorage.setItem('serenova_applied_version', info.version);
@@ -1058,10 +1061,26 @@ function saveData(d) {
   return Promise.resolve(true);
 }
 
+// サーバーへの保存（競合時の再試行を含む）が完了していない件数。
+// アップデート適用のリロードが、保存が完了する前に入力内容を
+// 巻き戻してしまわないよう待ち合わせるために使う。
+let __pendingSaves = 0;
+function waitForPendingSaves(timeoutMs = 8000) {
+  return new Promise(resolve => {
+    const start = Date.now();
+    (function check() {
+      if (__pendingSaves <= 0 || Date.now() - start > timeoutMs) { resolve(); return; }
+      setTimeout(check, 150);
+    })();
+  });
+}
+
 /* ══ Utilities ══════════════════════════════════════════════════════════════ */
 const uid = () => Math.random().toString(36).slice(2, 9);
 const today = () => new Date().toISOString().slice(0, 10);
 const fmtDate = d => d ? d.replace(/-/g, '/') : '';
+// 退院日を過ぎたら表示上は入院中扱いから外す（入退院の記録自体は保持したまま）
+const isHospitalizedNow = u => !!(u.hospitalized && u.hospitalizedSince && (!u.dischargedDate || u.dischargedDate >= today()));
 const getDOW = s => {
   if (!s) return '';
   const d = new Date(s);
@@ -3452,7 +3471,7 @@ function UserManagement({
       return /*#__PURE__*/React.createElement("tr", {
         key: u.id,
         style: {
-          opacity: u.hospitalized || u.discontinued ? 0.65 : 1
+          opacity: isHospitalizedNow(u) || u.discontinued ? 0.65 : 1
         }
       }, /*#__PURE__*/React.createElement("td", {
         style: {
@@ -3475,7 +3494,7 @@ function UserManagement({
           border: '1px solid rgba(107,114,128,.3)',
           whiteSpace: 'nowrap'
         }
-      }, "🚫 利用中止", u.discontinuedSince ? `（${fmtDate(u.discontinuedSince)}〜）` : '') : u.hospitalized ? /*#__PURE__*/React.createElement("span", {
+      }, "🚫 利用中止", u.discontinuedSince ? `（${fmtDate(u.discontinuedSince)}〜）` : '') : isHospitalizedNow(u) ? /*#__PURE__*/React.createElement("span", {
         style: {
           display: 'inline-block',
           padding: '2px 8px',
@@ -3546,7 +3565,7 @@ function UserManagement({
     const entries = data.dayMasters[day] || [];
     const registered = new Set(entries.map(e => e.userName));
     // 利用中止・入院中ユーザーは追加候補から除外
-    const unassigned = sortByKana(data.users.filter(u => !registered.has(u.name) && !u.discontinued && !u.hospitalized));
+    const unassigned = sortByKana(data.users.filter(u => !registered.has(u.name) && !u.discontinued && !isHospitalizedNow(u)));
     // 利用中止ユーザーはマスタ表から非表示（データは保持）
     const userMap = Object.fromEntries(data.users.map(u => [u.name, u]));
     // [entry, realIndex] のペアで保持し、表示番号と実インデックスを分離
@@ -6690,6 +6709,11 @@ function App() {
       // 使って自分の変更を再適用・再送信するため、ここで丸ごと上書きすると
       // 保存しようとした内容が消えてしまう（表示だけの更新は setData 側に任せる）。
       if (e.detail.conflict) return;
+      // 自分の保存がまだサーバーに届いていない間は取り込まない。この時点の
+      // 取得結果には自分の変更がまだ反映されておらず、丸ごと置き換えると
+      // 入力直後の内容が画面から一時的に消えて見えてしまう（保存自体は別途
+      // 進行中なので失われはしないが、混乱を避けるため次のポーリングに譲る）。
+      if (__pendingSaves > 0) return;
       try {
         setDataRaw(normalizeData(JSON.parse(e.detail.json)));
         showToast('他の端末の変更を取り込みました', 'ok');
@@ -6763,6 +6787,18 @@ function App() {
     };
   }, []);
 
+  // 保存がサーバーに届く前にタブを閉じる／更新すると入力内容が消えうるため、
+  // その間だけブラウザの標準的な離脱確認を出す。
+  useEffect(() => {
+    const onBeforeUnload = e => {
+      if (__pendingSaves <= 0) return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, []);
+
   // トーストの自動消去
   useEffect(() => {
     if (!toasts.length) return;
@@ -6786,28 +6822,42 @@ function App() {
   // 取得し直して同じ変更(fn)を再適用してから保存し直す。これをせず
   // 最新データでそのまま上書きすると、保存しようとした内容が
   // 消えてしまう（連絡ノートの入力が消える不具合の原因だった）。
+  // __pendingSaves は setData が呼ばれてから、保存が（成功・再試行の末の
+  // 成功・再試行の末のあきらめ、いずれかで）確定するまでの間だけ加算する。
+  // アップデート適用時のリロードは waitForPendingSaves() でこれが 0 になる
+  // のを待ってから行い、保存中の入力がリロードで消えるのを防ぐ。
   const retrySave = useCallback((fn, attempt = 0) => {
-    if (typeof fn !== 'function') return; // 再適用できない形（丸ごと置換）は諦める
-    if (!(window.pywebview && window.pywebview.api)) return;
-    if (attempt >= 5) {
-      showToast('他の端末との同時編集が重なり保存できませんでした。お手数ですが、もう一度入力してください。', 'err');
+    if (typeof fn !== 'function' || !(window.pywebview && window.pywebview.api)) {
+      __pendingSaves--; // 再適用できない形（丸ごと置換）は諦める
       return;
     }
-    window.pywebview.api.load_data().then(json => {
-      if (!json) return;
-      const latest = normalizeData(JSON.parse(json));
-      const rebased = fn(latest);
-      setDataRaw(rebased);
-      saveData(rebased).then(ok => {
-        if (ok === false) retrySave(fn, attempt + 1);
-      });
-    }).catch(() => {});
+    if (attempt >= 8) {
+      showToast('他の端末との同時編集が重なり保存できませんでした。お手数ですが、もう一度入力してください。', 'err');
+      __pendingSaves--;
+      return;
+    }
+    // 混み合っている時に間を置かず連打すると衝突が続きやすいため、
+    // 試行のたびに少し待ってから取り直す（3台が同時に保存する状況を想定）。
+    new Promise(r => setTimeout(r, Math.min(300 * (attempt + 1), 2000))).then(() => (
+      window.pywebview.api.load_data().then(json => {
+        if (!json) { __pendingSaves--; return; }
+        const latest = normalizeData(JSON.parse(json));
+        const rebased = fn(latest);
+        setDataRaw(rebased);
+        saveData(rebased).then(ok => {
+          if (ok === false) retrySave(fn, attempt + 1);
+          else __pendingSaves--;
+        });
+      }).catch(() => { __pendingSaves--; })
+    ));
   }, []);
   const setData = useCallback(fn => {
     setDataRaw(p => {
       const next = typeof fn === 'function' ? fn(p) : fn;
+      __pendingSaves++;
       saveData(next).then(ok => {
         if (ok === false) retrySave(fn);
+        else __pendingSaves--;
       });
       return next;
     });
