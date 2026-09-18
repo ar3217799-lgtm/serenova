@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.9.1';
+const APP_VERSION = '2.9.2';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -1013,31 +1013,36 @@ const defaultData = () => ({
   }))])),
   templates: [...TEMPLATES]
 });
+/* data.json / localStorage から読んだ生データを、常に完全な形へ整える。
+   loadData・restoreFromApi・リモート反映・競合時の再適用など、
+   「生データを受け取って使える状態にする」箇所はすべてここを通す。 */
+function normalizeData(p) {
+  const def = defaultData();
+  const rs = p.rehabSchedule || {};
+  DAYS.forEach(d => {
+    if (!rs[d]) rs[d] = def.rehabSchedule[d];
+  });
+  const dm = p.dayMasters || {};
+  DAYS.forEach(d => {
+    if (!dm[d]) dm[d] = [];
+  });
+  const users = (p.users || []).map(u => (u.name && !u.kanaManual) ? {...u, kana: autoKana(u.name)} : u);
+  return {
+    ...def,
+    ...p,
+    users,
+    rehabSchedule: rs,
+    dayMasters: dm,
+    karteRecords: p.karteRecords || [],
+    recBaseDate: p.recBaseDate || '2026-04-27',
+    templates: p.templates || [...TEMPLATES]
+  };
+}
 function loadData() {
   try {
     const raw = localStorage.getItem(STORE_KEY);
     if (!raw) return defaultData();
-    const p = JSON.parse(raw);
-    const def = defaultData();
-    const rs = p.rehabSchedule || {};
-    DAYS.forEach(d => {
-      if (!rs[d]) rs[d] = def.rehabSchedule[d];
-    });
-    const dm = p.dayMasters || {};
-    DAYS.forEach(d => {
-      if (!dm[d]) dm[d] = [];
-    });
-    const users = (p.users || []).map(u => (u.name && !u.kanaManual) ? {...u, kana: autoKana(u.name)} : u);
-    return {
-      ...def,
-      ...p,
-      users,
-      rehabSchedule: rs,
-      dayMasters: dm,
-      karteRecords: p.karteRecords || [],
-      recBaseDate: p.recBaseDate || '2026-04-27',
-      templates: p.templates || [...TEMPLATES]
-    };
+    return normalizeData(JSON.parse(raw));
   } catch {
     return defaultData();
   }
@@ -1045,10 +1050,12 @@ function loadData() {
 function saveData(d) {
   const json = JSON.stringify(d);
   localStorage.setItem(STORE_KEY, json);
-  // pywebview モードではファイルにも保存（アプリ終了後も保持）
+  // pywebview モードではファイルにも保存（アプリ終了後も保持）。
+  // 戻り値は setData 側で見て、競合時の再試行に使う。
   if (window.pywebview && window.pywebview.api) {
-    window.pywebview.api.save_data(json).catch(() => {});
+    return window.pywebview.api.save_data(json).catch(() => false);
   }
+  return Promise.resolve(true);
 }
 
 /* ══ Utilities ══════════════════════════════════════════════════════════════ */
@@ -6634,29 +6641,13 @@ function App() {
   // 他の端末が保存した最新データを取り込む（施設内共有時。3秒間隔でシムが検知して発火）
   useEffect(() => {
     const onRemote = e => {
+      // conflict:true はここでは無視する。setData 側が同じイベントの元データを
+      // 使って自分の変更を再適用・再送信するため、ここで丸ごと上書きすると
+      // 保存しようとした内容が消えてしまう（表示だけの更新は setData 側に任せる）。
+      if (e.detail.conflict) return;
       try {
-        const p = JSON.parse(e.detail.json);
-        const def = defaultData();
-        const rs = p.rehabSchedule || {};
-        DAYS.forEach(d => { if (!rs[d]) rs[d] = def.rehabSchedule[d]; });
-        const dm = p.dayMasters || {};
-        DAYS.forEach(d => { if (!dm[d]) dm[d] = []; });
-        const users = (p.users || []).map(u => (u.name && !u.kanaManual) ? {...u, kana: autoKana(u.name)} : u);
-        setDataRaw({
-          ...def,
-          ...p,
-          users,
-          rehabSchedule: rs,
-          dayMasters: dm,
-          karteRecords: p.karteRecords || [],
-          recBaseDate: p.recBaseDate || '2026-04-27'
-        });
-        showToast(
-          e.detail.conflict
-            ? '他の端末が先に保存したため、最新のデータに更新しました。直前の操作はもう一度お試しください。'
-            : '他の端末の変更を取り込みました',
-          e.detail.conflict ? 'warn' : 'ok'
-        );
+        setDataRaw(normalizeData(JSON.parse(e.detail.json)));
+        showToast('他の端末の変更を取り込みました', 'ok');
       } catch (err) {
         console.error('remote data merge error:', err);
       }
@@ -6704,13 +6695,36 @@ function App() {
       setAnimCls('page-enter');
     }, 200);
   }, [dispView]);
+  // 保存が競合（他の端末が先に保存済み）で拒否された時、最新データを
+  // 取得し直して同じ変更(fn)を再適用してから保存し直す。これをせず
+  // 最新データでそのまま上書きすると、保存しようとした内容が
+  // 消えてしまう（連絡ノートの入力が消える不具合の原因だった）。
+  const retrySave = useCallback((fn, attempt = 0) => {
+    if (typeof fn !== 'function') return; // 再適用できない形（丸ごと置換）は諦める
+    if (!(window.pywebview && window.pywebview.api)) return;
+    if (attempt >= 5) {
+      showToast('他の端末との同時編集が重なり保存できませんでした。お手数ですが、もう一度入力してください。', 'err');
+      return;
+    }
+    window.pywebview.api.load_data().then(json => {
+      if (!json) return;
+      const latest = normalizeData(JSON.parse(json));
+      const rebased = fn(latest);
+      setDataRaw(rebased);
+      saveData(rebased).then(ok => {
+        if (ok === false) retrySave(fn, attempt + 1);
+      });
+    }).catch(() => {});
+  }, []);
   const setData = useCallback(fn => {
     setDataRaw(p => {
       const next = typeof fn === 'function' ? fn(p) : fn;
-      saveData(next);
+      saveData(next).then(ok => {
+        if (ok === false) retrySave(fn);
+      });
       return next;
     });
-  }, []);
+  }, [retrySave]);
 
   // pywebview 起動時: API が準備できたらファイルからデータを読み込む
   useEffect(() => {
@@ -6719,26 +6733,7 @@ function App() {
       window.pywebview.api.load_data().then(json => {
         if (!json) return;
         try {
-          const p = JSON.parse(json);
-          const def = defaultData();
-          const rs = p.rehabSchedule || {};
-          DAYS.forEach(d => {
-            if (!rs[d]) rs[d] = def.rehabSchedule[d];
-          });
-          const dm = p.dayMasters || {};
-          DAYS.forEach(d => {
-            if (!dm[d]) dm[d] = [];
-          });
-          const users = (p.users || []).map(u => (u.name && !u.kanaManual) ? {...u, kana: autoKana(u.name)} : u);
-          setData(() => ({
-            ...def,
-            ...p,
-            users,
-            rehabSchedule: rs,
-            dayMasters: dm,
-            karteRecords: p.karteRecords || [],
-            recBaseDate: p.recBaseDate || '2026-04-27'
-          }));
+          setDataRaw(normalizeData(JSON.parse(json)));
         } catch (err) {
           console.error('load_data parse error:', err);
         }

@@ -1,7 +1,7 @@
 {
-  "version": "2.9.1",
+  "version": "2.9.2",
   "fileUrl": "https://ar3217799-lgtm.github.io/serenova/SmartSync.html",
-  "sha256": "8ec2ecc1c70701da7e055438e90b3bc0339bd822986621fdce3abbd47547de8d",
-  "releaseNote": "矛盾チェックの確認事項(info)はナビの赤バッジに数えないよう修正",
-  "releaseDate": "2026-09-08"
+  "sha256": "5c1655ff0828e20183658fe4a3312ea23f2e1751603e356fec6bda873e0f7a63",
+  "releaseNote": "重要な修正：複数端末で同時に保存すると入力内容が消える不具合を修正",
+  "releaseDate": "2026-09-18"
 }
