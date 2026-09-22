@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.11.1';
+const APP_VERSION = '2.12.0';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -1694,6 +1694,26 @@ function checkContradictions(data) {
         canRemoveAttendance: attExists,
         message: `【矛盾】${u.name} さん — ${fmtDate(k.date)} : 入院中（${fmtDate(u.hospitalizedSince)}〜${u.dischargedDate ? fmtDate(u.dischargedDate) : ''}）のはずですがカルテが存在します。`,
         detail: `解消: 右の「🗑️ カルテを削除」ボタンで削除するか、利用者管理で入院設定を確認してください。`
+      });
+    });
+  });
+
+  /* 8. 利用中止後の利用者にカルテが存在する（利用中止日以降はすべて対象。
+        入院と違い再開日という概念が無いため、期限なしで判定する） */
+  data.users.forEach(u => {
+    if (!u.discontinued || !u.discontinuedSince) return;
+    (data.karteRecords || []).filter(k => k.userName === u.name && k.date >= u.discontinuedSince).forEach(k => {
+      const att = data.dailyAttendance.find(a => a.date === k.date);
+      const attExists = !!(att && att.entries.some(e => e.userName === u.name));
+      issues.push({
+        type: 'error',
+        fix: 'karte',
+        fixType: 'delete_karte',
+        userName: u.name,
+        date: k.date,
+        canRemoveAttendance: attExists,
+        message: `【矛盾】${u.name} さん — ${fmtDate(k.date)} : 利用中止（${fmtDate(u.discontinuedSince)}〜）のはずですがカルテが存在します。`,
+        detail: `解消: 右の「🗑️ カルテを削除」ボタンで削除するか、利用者管理で利用中止設定を確認してください。`
       });
     });
   });
@@ -3106,7 +3126,7 @@ function UserManagement({
           fontSize: 11,
           color: 'var(--text3)'
         }
-      }, f.discontinued ? '利用中止中は曜日マスタへの表示・当日入力から除外されます' : '入院中はマスタや矛盾チェックから除外されます')), /*#__PURE__*/React.createElement("div", {
+      }, f.discontinued ? '利用中止中は曜日マスタへの表示・当日入力から除外されます（この期間にカルテがあると矛盾チェックで警告されます）' : '入院中はマスタや矛盾チェックから除外されます')), /*#__PURE__*/React.createElement("div", {
         style: {
           border: '1px solid var(--border)',
           borderRadius: 10,
