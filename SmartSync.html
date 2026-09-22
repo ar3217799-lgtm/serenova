@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.12.0';
+const APP_VERSION = '2.12.1';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -1040,6 +1040,28 @@ function normalizeData(p) {
     recBaseDate: p.recBaseDate || '2026-04-27',
     templates: p.templates || [...TEMPLATES]
   };
+}
+// サーバーから取得したデータを、無条件にローカルへ丸ごと上書きすると、
+// 「保存したつもりが実はまだサーバーに届いていなかった」項目（保存の
+// リトライが尽きて諦めた、離脱確認を無視して閉じた、等）がそのまま
+// 消えてしまう。id を突き合わせて、サーバー側に無い（＝届いていない）
+// ローカルの項目だけをサーバー取得結果へ足し戻す。
+// 正常に同期済みの削除は local 側にも残っていないため誤って復活しない。
+function mergeMissingById(serverArr, localArr) {
+  const server = serverArr || [];
+  const local = localArr || [];
+  const serverIds = new Set(server.map(x => x.id));
+  const onlyLocal = local.filter(x => x && x.id && !serverIds.has(x.id));
+  return onlyLocal.length ? [...server, ...onlyLocal] : server;
+}
+// 連絡ノート・カルテについて、ローカルにしか無い項目をサーバー取得結果へ
+// 足し戻したデータを返す。足し戻しが発生したかどうかも一緒に返す。
+function reconcileWithLocal(serverData, localData) {
+  const contactNotes = mergeMissingById(serverData.contactNotes, localData?.contactNotes);
+  const karteRecords = mergeMissingById(serverData.karteRecords, localData?.karteRecords);
+  const changed = contactNotes.length !== (serverData.contactNotes || []).length
+    || karteRecords.length !== (serverData.karteRecords || []).length;
+  return { merged: { ...serverData, contactNotes, karteRecords }, changed };
 }
 function loadData() {
   try {
@@ -6735,8 +6757,23 @@ function App() {
       // 進行中なので失われはしないが、混乱を避けるため次のポーリングに譲る）。
       if (__pendingSaves > 0) return;
       try {
-        setDataRaw(normalizeData(JSON.parse(e.detail.json)));
-        showToast('他の端末の変更を取り込みました', 'ok');
+        const server = normalizeData(JSON.parse(e.detail.json));
+        setDataRaw(prevLocal => {
+          const { merged, changed } = reconcileWithLocal(server, prevLocal);
+          if (changed) {
+            // 以前の保存の再試行が尽きて諦めた等の理由で、サーバーにまだ
+            // 届いていなかったローカルだけの項目があった → 書き戻す。
+            __pendingSaves++;
+            saveData(merged).then(ok => {
+              if (ok === false) retrySave(latest => reconcileWithLocal(latest, prevLocal).merged);
+              else __pendingSaves--;
+            });
+            showToast('保存できていなかった入力があったため、サーバーへ再送信しました', 'warn');
+          } else {
+            showToast('他の端末の変更を取り込みました', 'ok');
+          }
+          return merged;
+        });
       } catch (err) {
         console.error('remote data merge error:', err);
       }
@@ -6890,7 +6927,23 @@ function App() {
       window.pywebview.api.load_data().then(json => {
         if (!json) return;
         try {
-          setDataRaw(normalizeData(JSON.parse(json)));
+          const server = normalizeData(JSON.parse(json));
+          setDataRaw(prevLocal => {
+            const { merged, changed } = reconcileWithLocal(server, prevLocal);
+            if (changed) {
+              // 前回の終了時（クラッシュ・離脱確認を無視して閉じた・再試行が
+              // 尽きた等）にサーバーへ届かないまま残っていたローカルの入力を
+              // 見つけたので、起動のたびに必ず書き戻す。これが本来の
+              // 「確実に消えないようにする」ための最終防御線になる。
+              __pendingSaves++;
+              saveData(merged).then(ok => {
+                if (ok === false) retrySave(latest => reconcileWithLocal(latest, prevLocal).merged);
+                else __pendingSaves--;
+              });
+              showToast('保存できていなかった入力があったため、サーバーへ再送信しました', 'warn');
+            }
+            return merged;
+          });
         } catch (err) {
           console.error('load_data parse error:', err);
         }

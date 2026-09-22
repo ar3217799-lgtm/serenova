@@ -1,7 +1,7 @@
 {
-  "version": "2.12.0",
+  "version": "2.12.1",
   "fileUrl": "https://ar3217799-lgtm.github.io/serenova/SmartSync.html",
-  "sha256": "20b57a46977d5349bee934566414c0587d5b179ee51550262f6da7fc6f8e46ef",
-  "releaseNote": "利用中止後にカルテが存在する場合を矛盾チェックで検知するように",
+  "sha256": "f3772dcfab009634dcb3327f3e8d8fefeef17fee974a8fcd8108b75d703e7341",
+  "releaseNote": "保存が完了する前に閉じる・再試行が尽きる等でサーバーに届かなかった連絡ノート/カルテを、起動のたびに検知してサーバーへ自動で再送信するように",
   "releaseDate": "2026-09-22"
 }
