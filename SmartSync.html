@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.14.0';
+const APP_VERSION = '2.14.1';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -1209,7 +1209,12 @@ function waitForPendingSaves(timeoutMs = 8000) {
 
 /* ══ Utilities ══════════════════════════════════════════════════════════════ */
 const uid = () => Math.random().toString(36).slice(2, 9);
-const today = () => new Date().toISOString().slice(0, 10);
+// Date を YYYY-MM-DD にする時は、必ずこちらを使う。toISOString() は UTC に
+// 変換するため、日本時間（UTC+9）では日付が1日ずれる（例: 0時〜9時台に
+// today() を呼ぶと前日の日付になる、入院日をこの形式で丸めると1日前に
+// なる、等）。ローカルの年月日をそのまま文字列にすることでこれを避ける。
+const toLocalDateStr = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const today = () => toLocalDateStr(new Date());
 const fmtDate = d => d ? d.replace(/-/g, '/') : '';
 // 退院日を過ぎたら表示上は入院中扱いから外す（入退院の記録自体は保持したまま）
 const isHospitalizedNow = u => !!(u.hospitalized && u.hospitalizedSince && (!u.dischargedDate || u.dischargedDate >= today()));
@@ -6971,6 +6976,14 @@ function App() {
     // 起動時の取得と定期ポーリングが前後した場合に、古い版で新しい版を
     // 踏み潰さないようにする（データ自体は下の突き合わせで失われない）。
     if (typeof rev === 'number' && typeof __baseRev === 'number' && rev < __baseRev) return;
+    // 自分の保存（利用終了後の連絡ノート削除など）が進行中の間は取り込まない。
+    // reconcileWithLocal は「サーバーに無くローカルにはある」ものだけを
+    // 復元する仕組みで、逆に「ローカルが意図して削除した」ものまでは
+    // 区別できない。保存中に取得したサーバー側の古いスナップショットを
+    // ここで取り込むと、削除した直後の項目がサーバー版から復活して
+    // しまう（起動直後に restoreFromApi が2回走ることがあり、片方が
+    // 保存の完了前のスナップショットを掴むと発生する）。
+    if (__pendingSaves > 0) return;
     let server;
     try {
       server = normalizeData(JSON.parse(json));
@@ -7063,21 +7076,33 @@ function App() {
   }, [data.users.map(u => (u.id || '') + (u.name || '')).join(',')]);
 
   // 入院中の利用者は、退院日が入るまで利用予定日ごとに連絡ノートへ
-  // 「休み」記録を自動で積み増す（日付が経つほど、開くたびに追いつく）
+  // 「休み」記録を自動で積み増す（日付が経つほど、開くたびに追いつく）。
+  // ただし利用終了（利用中止）していれば、その日以降は入院中かどうかに
+  // 関わらず何も記録しない（生成を止めるだけでなく、利用終了より前に
+  // 誤って生成済みのものがあれば削除する）。
+  const AUTO_ABSENCE_DETAIL = '入院中のためお休みです';
   useEffect(() => {
     const hospitalizedUsers = data.users.filter(u => u.hospitalized && u.hospitalizedSince);
-    if (!hospitalizedUsers.length) return;
+    const discontinuedMap = Object.fromEntries(
+      data.users.filter(u => u.discontinued && u.discontinuedSince).map(u => [u.name, u.discontinuedSince])
+    );
     const todayStr = today();
     const newNotes = [];
     hospitalizedUsers.forEach(u => {
-      const endDate = u.dischargedDate && u.dischargedDate < todayStr ? u.dischargedDate : todayStr;
+      let endDate = u.dischargedDate && u.dischargedDate < todayStr ? u.dischargedDate : todayStr;
+      const cutoff = discontinuedMap[u.name];
+      if (cutoff && cutoff <= endDate) {
+        const before = new Date(cutoff + 'T00:00:00');
+        before.setDate(before.getDate() - 1);
+        endDate = toLocalDateStr(before);
+      }
       if (endDate < u.hospitalizedSince) return;
       const registeredDays = DAYS.filter(d => (data.dayMasters[d] || []).some(dm => dm.userName === u.name));
       if (!registeredDays.length) return;
       let cur = new Date(u.hospitalizedSince + 'T00:00:00');
       const end = new Date(endDate + 'T00:00:00');
       while (cur <= end) {
-        const dateStr = cur.toISOString().slice(0, 10);
+        const dateStr = toLocalDateStr(cur);
         if (registeredDays.includes(getDOW(dateStr))) {
           const exists = data.contactNotes.some(n => n.userName === u.name && n.targetDate === dateStr && n.category === '休み');
           if (!exists) {
@@ -7088,7 +7113,7 @@ function App() {
               contactFrom: '',
               targetDate: dateStr,
               category: '休み',
-              details: '入院中のためお休みです',
+              details: AUTO_ABSENCE_DETAIL,
               reporter: ''
             });
           }
@@ -7096,13 +7121,22 @@ function App() {
         cur.setDate(cur.getDate() + 1);
       }
     });
-    if (newNotes.length) {
+    // 利用終了より前に自動生成されてしまった分を削除する（この自動生成が
+    // 作った印である category/details の組み合わせのものだけを対象にし、
+    // スタッフが個別に入力した連絡ノートには触れない）。
+    const staleIds = new Set(
+      data.contactNotes
+        .filter(n => n.category === '休み' && n.details === AUTO_ABSENCE_DETAIL
+          && discontinuedMap[n.userName] && n.targetDate >= discontinuedMap[n.userName])
+        .map(n => n.id)
+    );
+    if (newNotes.length || staleIds.size) {
       setData(p => ({
         ...p,
-        contactNotes: [...p.contactNotes, ...newNotes]
+        contactNotes: [...p.contactNotes.filter(n => !staleIds.has(n.id)), ...newNotes]
       }));
     }
-  }, [data.users.map(u => `${u.id}:${u.hospitalized}:${u.hospitalizedSince}:${u.dischargedDate}`).join(','), JSON.stringify(data.dayMasters)]);
+  }, [data.users.map(u => `${u.id}:${u.hospitalized}:${u.hospitalizedSince}:${u.dischargedDate}:${u.discontinued}:${u.discontinuedSince}`).join(','), JSON.stringify(data.dayMasters)]);
 
   // トースト登録 → モジュールレベル関数からアクセス可能にする
   useEffect(() => {
