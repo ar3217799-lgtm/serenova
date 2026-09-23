@@ -1,7 +1,7 @@
 {
-  "version": "2.13.0",
+  "version": "2.13.1",
   "fileUrl": "https://ar3217799-lgtm.github.io/serenova/SmartSync.html",
-  "sha256": "5dde664cc3693524202ac4a40d7b4b367062a33a87c9d67c2918f3f3e1f42e3a",
-  "releaseNote": "3台同時利用で他の端末の入力を上書きして消してしまう不具合を修正。反映も3秒→1.5秒に短縮し、画面に戻った瞬間にも同期するように",
+  "sha256": "bef8b840d14a070cbb6fbe47c0886028c3c535f0b6793acf02615a177f5f0eff",
+  "releaseNote": "親機の再起動やネットワーク断で保存できなかった入力を、通信の回復後に自動で保存し直すように",
   "releaseDate": "2026-09-23"
 }

@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.13.0';
+const APP_VERSION = '2.13.1';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -1117,6 +1117,9 @@ function loadData() {
    ここでは __baseRev として「今ローカルが保持しているデータの版」だけを
    管理し、__smartsyncCall で base_rev を明示的に送ることでズレを無くす。 */
 let __baseRev = null;   // null = まだサーバーの版が分からない
+// サーバーへ送れていない入力が手元に残っている時刻。ネットワーク断や親機の
+// 再起動で送信に失敗した場合に立て、復旧後のポーリングで必ず送り直す。
+let __unsentSince = null;
 const hasRawSync = () => typeof window.__smartsyncCall === 'function';
 const rawCall = (m, a) => window.__smartsyncCall(m, a || {});
 
@@ -1129,7 +1132,12 @@ function saveData(d) {
     // （false を返すと呼び出し元が retrySave で最新を取得して再適用する）。
     if (__baseRev === null) return Promise.resolve(false);
     return rawCall('save_data', { json_str: json, base_rev: __baseRev }).then(r => {
-      if (r && r.ok) { __baseRev = r.rev; return true; }
+      if (r && r.ok) {
+        __baseRev = r.rev;
+        // 保存は毎回データ全体を送るため、成功した時点で手元の未送信は解消する
+        __unsentSince = null;
+        return true;
+      }
       return false;   // 競合・失敗はいずれも retrySave に任せる
     }).catch(() => false);
   }
@@ -6797,11 +6805,17 @@ function App() {
   const retrySave = useCallback((fn, attempt = 0) => {
     const usable = hasRawSync() || (window.pywebview && window.pywebview.api);
     if (typeof fn !== 'function' || !usable) {
-      __pendingSaves--; // 再適用できない形（丸ごと置換）は諦める
+      // ここで送れなかった内容は手元にだけ残るので、印を付けて
+      // ポーリング側から必ず送り直させる（諦めて消さない）。
+      __unsentSince = __unsentSince || Date.now();
+      __pendingSaves--;
       return;
     }
     if (attempt >= 8) {
-      showToast('他の端末との同時編集が重なり保存できませんでした。お手数ですが、もう一度入力してください。', 'err');
+      // 一旦ここで打ち切るが、内容は手元に残したまま未送信の印を立て、
+      // 通信が回復し次第ポーリングが自動で送り直す。
+      __unsentSince = __unsentSince || Date.now();
+      showToast('保存が混み合っています。通信の回復後に自動で保存し直します。', 'warn');
       __pendingSaves--;
       return;
     }
@@ -6824,7 +6838,9 @@ function App() {
       // 途中に非同期の切れ目を挟まずそのまま保存する。これにより
       // base_rev と送信データの版が必ず一致する。
       return rawCall('load_data', {}).then(r => {
-        if (!r || r.rev === undefined) { __pendingSaves--; return; }
+        // 応答が取れない（親機が落ちている・未登録など）場合も、諦めず
+        // 間隔を空けて再試行する。通信の瞬断で入力が失われないようにする。
+        if (!r || r.rev === undefined) { retrySave(fn, attempt + 1); return; }
         // サーバーが空（新規導入直後）なら手元のデータをそのまま採用する。
         const latest = r.json ? normalizeData(JSON.parse(r.json)) : dataRef.current;
         const rebased = fn(latest);
@@ -6834,7 +6850,7 @@ function App() {
           if (ok === false) retrySave(fn, attempt + 1);
           else __pendingSaves--;
         });
-      }).catch(() => { __pendingSaves--; });
+      }).catch(() => { retrySave(fn, attempt + 1); });
     });
   }, [commitData]);
   const setData = useCallback(fn => {
@@ -6922,7 +6938,22 @@ function App() {
       if (stopped || busy || __pendingSaves > 0) return;
       busy = true;
       rawCall('get_rev', {}).then(r => {
-        if (!r || r.rev === undefined || r.rev === __baseRev) return;
+        if (!r || r.rev === undefined) return;
+        if (r.rev === __baseRev) {
+          if (!__unsentSince) return;
+          // サーバーは自分が最後に同期した版のまま＝他の端末は何も変えて
+          // いないので、手元のデータをそのまま送り直せば誰の入力も潰さない。
+          // （親機の再起動やWi-Fi瞬断で送れなかった分をここで回収する）
+          __pendingSaves++;
+          const snapshot = dataRef.current;
+          return saveData(snapshot).then(ok => {
+            if (ok === false) retrySave(latest => reconcileWithLocal(latest, snapshot).merged);
+            else {
+              __pendingSaves--;
+              showToast('保存できていなかった入力をサーバーへ保存しました', 'ok');
+            }
+          });
+        }
         return rawCall('load_data', {}).then(d => {
           if (!d || d.rev === undefined || !d.json) return;
           // 取得している間に自分の保存が始まっていたら、この結果は捨てる
@@ -6943,7 +6974,7 @@ function App() {
       document.removeEventListener('visibilitychange', onWake);
       window.removeEventListener('focus', onWake);
     };
-  }, [applyServerData]);
+  }, [applyServerData, retrySave]);
 
   // ふりがな自動生成（辞書から常に最新値で上書き。IME入力の不正値も修正）
   useEffect(() => {
