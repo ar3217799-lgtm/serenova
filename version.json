@@ -1,7 +1,7 @@
 {
-  "version": "2.12.1",
+  "version": "2.13.0",
   "fileUrl": "https://ar3217799-lgtm.github.io/serenova/SmartSync.html",
-  "sha256": "f3772dcfab009634dcb3327f3e8d8fefeef17fee974a8fcd8108b75d703e7341",
-  "releaseNote": "保存が完了する前に閉じる・再試行が尽きる等でサーバーに届かなかった連絡ノート/カルテを、起動のたびに検知してサーバーへ自動で再送信するように",
-  "releaseDate": "2026-09-22"
+  "sha256": "5dde664cc3693524202ac4a40d7b4b367062a33a87c9d67c2918f3f3e1f42e3a",
+  "releaseNote": "3台同時利用で他の端末の入力を上書きして消してしまう不具合を修正。反映も3秒→1.5秒に短縮し、画面に戻った瞬間にも同期するように",
+  "releaseDate": "2026-09-23"
 }

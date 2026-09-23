@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.12.1';
+const APP_VERSION = '2.13.0';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -1030,13 +1030,32 @@ function normalizeData(p) {
     if (!dm[d]) dm[d] = [];
   });
   const users = (p.users || []).map(u => (u.name && !u.kanaManual) ? {...u, kana: autoKana(u.name)} : u);
+  // 日付や氏名が欠けた記録が1件でも混ざると、並び替え（localeCompare）で
+  // 画面全体が真っ白になって操作不能になる。表示側で個別に防ぐと漏れるため、
+  // データを読み込む時点で必ず文字列を持たせておく。
+  const notes = (p.contactNotes || []).map(n => ({
+    ...n,
+    userName: n.userName || '',
+    targetDate: n.targetDate || n.recordDate || '',
+    recordDate: n.recordDate || n.targetDate || '',
+    category: n.category || '',
+    details: n.details || ''
+  }));
+  const fixDated = arr => (arr || []).map(r => ({
+    ...r,
+    date: r.date || '',
+    userName: r.userName === undefined ? '' : r.userName
+  }));
   return {
     ...def,
     ...p,
     users,
     rehabSchedule: rs,
     dayMasters: dm,
-    karteRecords: p.karteRecords || [],
+    contactNotes: notes,
+    karteRecords: fixDated(p.karteRecords),
+    visitRecords: fixDated(p.visitRecords),
+    dailyAttendance: fixDated(p.dailyAttendance),
     recBaseDate: p.recBaseDate || '2026-04-27',
     templates: p.templates || [...TEMPLATES]
   };
@@ -1054,14 +1073,31 @@ function mergeMissingById(serverArr, localArr) {
   const onlyLocal = local.filter(x => x && x.id && !serverIds.has(x.id));
   return onlyLocal.length ? [...server, ...onlyLocal] : server;
 }
-// 連絡ノート・カルテについて、ローカルにしか無い項目をサーバー取得結果へ
-// 足し戻したデータを返す。足し戻しが発生したかどうかも一緒に返す。
+// 日付をキーに持つ記録（当日入力・来所記録）用。サーバーにその日付が
+// 全く無い場合だけ足し戻す。サーバーに既にある日付は絶対に上書きしない。
+function mergeMissingByDate(serverArr, localArr) {
+  const server = serverArr || [];
+  const local = localArr || [];
+  const serverDates = new Set(server.map(x => x.date));
+  const onlyLocal = local.filter(x => x && x.date && !serverDates.has(x.date));
+  return onlyLocal.length ? [...server, ...onlyLocal] : server;
+}
+// サーバー取得結果で置き換える直前に、ローカルにしか無い記録を足し戻した
+// データを返す。足し戻しが発生したかどうかも一緒に返す。
 function reconcileWithLocal(serverData, localData) {
-  const contactNotes = mergeMissingById(serverData.contactNotes, localData?.contactNotes);
-  const karteRecords = mergeMissingById(serverData.karteRecords, localData?.karteRecords);
-  const changed = contactNotes.length !== (serverData.contactNotes || []).length
-    || karteRecords.length !== (serverData.karteRecords || []).length;
-  return { merged: { ...serverData, contactNotes, karteRecords }, changed };
+  const merged = { ...serverData };
+  let changed = false;
+  const byId = ['users', 'staff', 'contactNotes', 'karteRecords'];
+  byId.forEach(k => {
+    merged[k] = mergeMissingById(serverData[k], localData?.[k]);
+    if (merged[k].length !== (serverData[k] || []).length) changed = true;
+  });
+  const byDate = ['dailyAttendance', 'visitRecords'];
+  byDate.forEach(k => {
+    merged[k] = mergeMissingByDate(serverData[k], localData?.[k]);
+    if (merged[k].length !== (serverData[k] || []).length) changed = true;
+  });
+  return { merged, changed };
 }
 function loadData() {
   try {
@@ -1072,11 +1108,32 @@ function loadData() {
     return defaultData();
   }
 }
+/* ══ サーバーとの同期（版番号の厳密な管理） ═══════════════════════════════════
+   シム(window.pywebview.api)の save_data は「送信する瞬間のシム内部のREV」を
+   base_rev として送るが、そのREVはシム側の3秒ポーリングでも書き換わる。
+   そのため「手元のデータが基づく版」と「申告する版」がズレ、サーバーの
+   競合検出をすり抜けて他端末の保存を丸ごと上書きしてしまうこと
+   （＝入力した内容が消える）があった。
+   ここでは __baseRev として「今ローカルが保持しているデータの版」だけを
+   管理し、__smartsyncCall で base_rev を明示的に送ることでズレを無くす。 */
+let __baseRev = null;   // null = まだサーバーの版が分からない
+const hasRawSync = () => typeof window.__smartsyncCall === 'function';
+const rawCall = (m, a) => window.__smartsyncCall(m, a || {});
+
 function saveData(d) {
   const json = JSON.stringify(d);
   localStorage.setItem(STORE_KEY, json);
-  // pywebview モードではファイルにも保存（アプリ終了後も保持）。
-  // 戻り値は setData 側で見て、競合時の再試行に使う。
+  if (hasRawSync()) {
+    // 版が不明なまま送らない。base_rev を省くとサーバーが競合判定を
+    // スキップして無条件上書きになるため、必ず取得し直してから保存する
+    // （false を返すと呼び出し元が retrySave で最新を取得して再適用する）。
+    if (__baseRev === null) return Promise.resolve(false);
+    return rawCall('save_data', { json_str: json, base_rev: __baseRev }).then(r => {
+      if (r && r.ok) { __baseRev = r.rev; return true; }
+      return false;   // 競合・失敗はいずれも retrySave に任せる
+    }).catch(() => false);
+  }
+  // 旧exe（__smartsyncCall が無い）向けのフォールバック
   if (window.pywebview && window.pywebview.api) {
     return window.pywebview.api.save_data(json).catch(() => false);
   }
@@ -6719,6 +6776,78 @@ function Toaster({
 /* ══ App Root ════════════════════════════════════════════════════════════════ */
 function App() {
   const [data, setDataRaw] = useState(() => loadData());
+  // 現在のデータを同期的に保持する参照。React の状態更新はキューを経由して
+  // 反映が遅れるため、保存や同期の判断は必ずこちらを見る（更新関数の中で
+  // 副作用を起こさずに済み、同じtick内の連続更新も取りこぼさない）。
+  const dataRef = useRef(data);
+  const commitData = useCallback(next => {
+    dataRef.current = next;
+    setDataRaw(next);
+    return next;
+  }, []);
+
+  // 保存が競合（他の端末が先に保存済み）で拒否された時、最新データを
+  // 取得し直して同じ変更(fn)を再適用してから保存し直す。これをせず
+  // 最新データでそのまま上書きすると、保存しようとした内容が
+  // 消えてしまう（連絡ノートの入力が消える不具合の原因だった）。
+  // __pendingSaves は setData が呼ばれてから、保存が（成功・再試行の末の
+  // 成功・再試行の末のあきらめ、いずれかで）確定するまでの間だけ加算する。
+  // アップデート適用時のリロードは waitForPendingSaves() でこれが 0 になる
+  // のを待ってから行い、保存中の入力がリロードで消えるのを防ぐ。
+  const retrySave = useCallback((fn, attempt = 0) => {
+    const usable = hasRawSync() || (window.pywebview && window.pywebview.api);
+    if (typeof fn !== 'function' || !usable) {
+      __pendingSaves--; // 再適用できない形（丸ごと置換）は諦める
+      return;
+    }
+    if (attempt >= 8) {
+      showToast('他の端末との同時編集が重なり保存できませんでした。お手数ですが、もう一度入力してください。', 'err');
+      __pendingSaves--;
+      return;
+    }
+    // 混み合っている時に間を置かず連打すると衝突が続きやすいため、
+    // 試行のたびに少し待ってから取り直す（3台が同時に保存する状況を想定）。
+    new Promise(r => setTimeout(r, Math.min(300 * (attempt + 1), 2000))).then(() => {
+      if (!hasRawSync()) {
+        // 旧exe向けフォールバック（版番号を明示できないため従来どおり）
+        return window.pywebview.api.load_data().then(json => {
+          if (!json) { __pendingSaves--; return; }
+          const rebased = fn(normalizeData(JSON.parse(json)));
+          commitData(rebased);
+          saveData(rebased).then(ok => {
+            if (ok === false) retrySave(fn, attempt + 1);
+            else __pendingSaves--;
+          });
+        }).catch(() => { __pendingSaves--; });
+      }
+      // 取得した版(r.rev)と、その中身(r.json)から作った rebased を、
+      // 途中に非同期の切れ目を挟まずそのまま保存する。これにより
+      // base_rev と送信データの版が必ず一致する。
+      return rawCall('load_data', {}).then(r => {
+        if (!r || r.rev === undefined) { __pendingSaves--; return; }
+        // サーバーが空（新規導入直後）なら手元のデータをそのまま採用する。
+        const latest = r.json ? normalizeData(JSON.parse(r.json)) : dataRef.current;
+        const rebased = fn(latest);
+        __baseRev = r.rev;
+        commitData(rebased);
+        saveData(rebased).then(ok => {
+          if (ok === false) retrySave(fn, attempt + 1);
+          else __pendingSaves--;
+        });
+      }).catch(() => { __pendingSaves--; });
+    });
+  }, [commitData]);
+  const setData = useCallback(fn => {
+    // dataRef から同期的に最新を取り出して適用する（React の更新キューを
+    // 待たないため、同じ操作が二重に走ったり取りこぼされたりしない）。
+    const next = typeof fn === 'function' ? fn(dataRef.current) : fn;
+    commitData(next);
+    __pendingSaves++;
+    saveData(next).then(ok => {
+      if (ok === false) retrySave(fn);
+      else __pendingSaves--;
+    });
+  }, [commitData, retrySave]);
   // kana 検索マップを同期更新（このレンダリング内のソートに即反映）
   __kanaMap = Object.fromEntries(
     data.users.filter(u => u.name).map(u => [u.name, u.kana || u.name])
@@ -6744,43 +6873,77 @@ function App() {
     return () => clearTimeout(tid);
   }, []);
 
-  // 他の端末が保存した最新データを取り込む（施設内共有時。3秒間隔でシムが検知して発火）
+  // サーバーから受け取ったデータを画面へ反映する。版番号(rev)も必ず一緒に
+  // 受け取り、__baseRev をその版に揃える。ここがズレると、次の保存が
+  // 他端末の変更を上書きしてしまう（入力が消える原因そのもの）ため、
+  // 「データを適用した時だけ版を進める」ことを徹底する。
+  const applyServerData = useCallback((json, rev) => {
+    // 起動時の取得と定期ポーリングが前後した場合に、古い版で新しい版を
+    // 踏み潰さないようにする（データ自体は下の突き合わせで失われない）。
+    if (typeof rev === 'number' && typeof __baseRev === 'number' && rev < __baseRev) return;
+    let server;
+    try {
+      server = normalizeData(JSON.parse(json));
+    } catch (err) {
+      console.error('server data parse error:', err);
+      return;
+    }
+    const { merged, changed } = reconcileWithLocal(server, dataRef.current);
+    __baseRev = rev;
+    commitData(merged);
+    if (changed) {
+      // 前回の終了時（クラッシュ・離脱確認を無視して閉じた・再試行が尽きた等）に
+      // サーバーへ届かないまま残っていたローカルの入力を見つけたので書き戻す。
+      __pendingSaves++;
+      const rebase = latest => reconcileWithLocal(latest, merged).merged;
+      saveData(merged).then(ok => {
+        if (ok === false) retrySave(rebase);
+        else __pendingSaves--;
+      });
+      showToast('保存できていなかった入力があったため、サーバーへ再送信しました', 'warn');
+    }
+  }, [commitData, retrySave]);
+
+  // 他の端末の変更を取り込む。シムのイベントは版番号を持たないため使わず、
+  // 版番号と中身を一度に取得できる __smartsyncCall で自前にポーリングする。
   useEffect(() => {
-    const onRemote = e => {
-      // conflict:true はここでは無視する。setData 側が同じイベントの元データを
-      // 使って自分の変更を再適用・再送信するため、ここで丸ごと上書きすると
-      // 保存しようとした内容が消えてしまう（表示だけの更新は setData 側に任せる）。
-      if (e.detail.conflict) return;
-      // 自分の保存がまだサーバーに届いていない間は取り込まない。この時点の
-      // 取得結果には自分の変更がまだ反映されておらず、丸ごと置き換えると
-      // 入力直後の内容が画面から一時的に消えて見えてしまう（保存自体は別途
-      // 進行中なので失われはしないが、混乱を避けるため次のポーリングに譲る）。
-      if (__pendingSaves > 0) return;
-      try {
-        const server = normalizeData(JSON.parse(e.detail.json));
-        setDataRaw(prevLocal => {
-          const { merged, changed } = reconcileWithLocal(server, prevLocal);
-          if (changed) {
-            // 以前の保存の再試行が尽きて諦めた等の理由で、サーバーにまだ
-            // 届いていなかったローカルだけの項目があった → 書き戻す。
-            __pendingSaves++;
-            saveData(merged).then(ok => {
-              if (ok === false) retrySave(latest => reconcileWithLocal(latest, prevLocal).merged);
-              else __pendingSaves--;
-            });
-            showToast('保存できていなかった入力があったため、サーバーへ再送信しました', 'warn');
-          } else {
-            showToast('他の端末の変更を取り込みました', 'ok');
-          }
-          return merged;
+    if (!hasRawSync()) {
+      // 旧exe向けフォールバック（版番号が取れないので従来どおりイベントで取り込む）
+      const onRemote = e => {
+        if (e.detail.conflict || __pendingSaves > 0) return;
+        applyServerData(e.detail.json, __baseRev);
+      };
+      window.addEventListener('smartsync-remote-data', onRemote);
+      return () => window.removeEventListener('smartsync-remote-data', onRemote);
+    }
+    let stopped = false;
+    let busy = false;
+    const tick = () => {
+      if (stopped || busy || __pendingSaves > 0) return;
+      busy = true;
+      rawCall('get_rev', {}).then(r => {
+        if (!r || r.rev === undefined || r.rev === __baseRev) return;
+        return rawCall('load_data', {}).then(d => {
+          if (!d || d.rev === undefined || !d.json) return;
+          // 取得している間に自分の保存が始まっていたら、この結果は捨てる
+          // （古い版で上書きしないため。次回のポーリングで取り込む）。
+          if (__pendingSaves > 0) return;
+          applyServerData(d.json, d.rev);
         });
-      } catch (err) {
-        console.error('remote data merge error:', err);
-      }
+      }).catch(() => {}).then(() => { busy = false; });
     };
-    window.addEventListener('smartsync-remote-data', onRemote);
-    return () => window.removeEventListener('smartsync-remote-data', onRemote);
-  }, []);
+    const id = setInterval(tick, 1500);
+    // 画面に戻ってきた瞬間にも取り込み、別PCの入力をすぐ反映する
+    const onWake = () => { if (document.visibilityState === 'visible') tick(); };
+    document.addEventListener('visibilitychange', onWake);
+    window.addEventListener('focus', onWake);
+    return () => {
+      stopped = true;
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onWake);
+      window.removeEventListener('focus', onWake);
+    };
+  }, [applyServerData]);
 
   // ふりがな自動生成（辞書から常に最新値で上書き。IME入力の不正値も修正）
   useEffect(() => {
@@ -6875,78 +7038,30 @@ function App() {
       setAnimCls('page-enter');
     }, 200);
   }, [dispView]);
-  // 保存が競合（他の端末が先に保存済み）で拒否された時、最新データを
-  // 取得し直して同じ変更(fn)を再適用してから保存し直す。これをせず
-  // 最新データでそのまま上書きすると、保存しようとした内容が
-  // 消えてしまう（連絡ノートの入力が消える不具合の原因だった）。
-  // __pendingSaves は setData が呼ばれてから、保存が（成功・再試行の末の
-  // 成功・再試行の末のあきらめ、いずれかで）確定するまでの間だけ加算する。
-  // アップデート適用時のリロードは waitForPendingSaves() でこれが 0 になる
-  // のを待ってから行い、保存中の入力がリロードで消えるのを防ぐ。
-  const retrySave = useCallback((fn, attempt = 0) => {
-    if (typeof fn !== 'function' || !(window.pywebview && window.pywebview.api)) {
-      __pendingSaves--; // 再適用できない形（丸ごと置換）は諦める
-      return;
-    }
-    if (attempt >= 8) {
-      showToast('他の端末との同時編集が重なり保存できませんでした。お手数ですが、もう一度入力してください。', 'err');
-      __pendingSaves--;
-      return;
-    }
-    // 混み合っている時に間を置かず連打すると衝突が続きやすいため、
-    // 試行のたびに少し待ってから取り直す（3台が同時に保存する状況を想定）。
-    new Promise(r => setTimeout(r, Math.min(300 * (attempt + 1), 2000))).then(() => (
-      window.pywebview.api.load_data().then(json => {
-        if (!json) { __pendingSaves--; return; }
-        const latest = normalizeData(JSON.parse(json));
-        const rebased = fn(latest);
-        setDataRaw(rebased);
-        saveData(rebased).then(ok => {
-          if (ok === false) retrySave(fn, attempt + 1);
-          else __pendingSaves--;
-        });
-      }).catch(() => { __pendingSaves--; })
-    ));
-  }, []);
-  const setData = useCallback(fn => {
-    setDataRaw(p => {
-      const next = typeof fn === 'function' ? fn(p) : fn;
-      __pendingSaves++;
-      saveData(next).then(ok => {
-        if (ok === false) retrySave(fn);
-        else __pendingSaves--;
-      });
-      return next;
-    });
-  }, [retrySave]);
 
   // pywebview 起動時: API が準備できたらファイルからデータを読み込む
   useEffect(() => {
+    // 起動時はサーバーの版番号(rev)も一緒に取得して __baseRev を確定させる。
+    // これが確定するまで saveData は送信せず（retrySave 経由で取得し直す）、
+    // 版が分からないまま無条件上書きしてしまうことを防ぐ。
     const restoreFromApi = () => {
+      if (hasRawSync()) {
+        rawCall('load_data', {}).then(r => {
+          if (!r || r.rev === undefined) return;
+          if (!r.json) {
+            // サーバーにまだデータが無い（新規導入直後）。取り込むものは
+            // 無いが、版だけは確定させる。これをしないと __baseRev が
+            // null のままで、最初の保存が永久に送信できなくなる。
+            __baseRev = r.rev;
+            return;
+          }
+          applyServerData(r.json, r.rev);
+        }).catch(err => console.error('load_data error:', err));
+        return;
+      }
       if (!window.pywebview || !window.pywebview.api) return;
       window.pywebview.api.load_data().then(json => {
-        if (!json) return;
-        try {
-          const server = normalizeData(JSON.parse(json));
-          setDataRaw(prevLocal => {
-            const { merged, changed } = reconcileWithLocal(server, prevLocal);
-            if (changed) {
-              // 前回の終了時（クラッシュ・離脱確認を無視して閉じた・再試行が
-              // 尽きた等）にサーバーへ届かないまま残っていたローカルの入力を
-              // 見つけたので、起動のたびに必ず書き戻す。これが本来の
-              // 「確実に消えないようにする」ための最終防御線になる。
-              __pendingSaves++;
-              saveData(merged).then(ok => {
-                if (ok === false) retrySave(latest => reconcileWithLocal(latest, prevLocal).merged);
-                else __pendingSaves--;
-              });
-              showToast('保存できていなかった入力があったため、サーバーへ再送信しました', 'warn');
-            }
-            return merged;
-          });
-        } catch (err) {
-          console.error('load_data parse error:', err);
-        }
+        if (json) applyServerData(json, __baseRev);
       }).catch(err => console.error('load_data error:', err));
     };
     // 施設内共有ではペアリング成立前から window.pywebview.api が存在するため、
