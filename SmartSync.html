@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.13.1';
+const APP_VERSION = '2.14.0';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -799,10 +799,34 @@ function isNewerVersion(a, b) {
   return false;
 }
 
-// バージョン確認（起動時に非同期で実行）
+// この起動中に「後で」を押されたバージョン（次回起動時はまた通知する）
+let __dismissedVersion = null;
+
+// 親機で実際に配信されているファイルのバージョンを読む。
+// 施設内の他のPCが既に更新していれば、ダウンロードせず再読み込みするだけで
+// 最新になるため、それを判定するのに使う。
+async function getServedVersion() {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 7000);
+    const res = await fetch(location.pathname, { cache: 'no-store', signal: ctrl.signal });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const m = (await res.text()).match(/const APP_VERSION = '([\d.]+)'/);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+// バージョン確認（起動直後と、その後も定期的に実行）
+let __lastUpdateCheck = 0;
 async function checkForUpdates(setUpdateInfo) {
   // 設定前はスキップ
   if (UPDATE_CHECK_URL.includes('[YOUR_GITHUB')) return;
+  // ウィンドウの切り替えのたびに問い合わせないよう、最低60秒は間隔を空ける
+  if (Date.now() - __lastUpdateCheck < 60000) return;
+  __lastUpdateCheck = Date.now();
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 7000);
@@ -822,18 +846,37 @@ async function checkForUpdates(setUpdateInfo) {
     } catch {
       return;
     }
-    // バージョンが新しい場合のみ通知
+    // 今まさに動いているコードのバージョン(APP_VERSION)だけを基準にする。
+    // 以前は localStorage の「適用済みバージョン」でも抑止していたが、
+    // ブラウザ版でファイルを差し替えないまま「適用済み」と記録されたり、
+    // 古いファイルに戻された端末では二度と通知されず、何世代も遅れた
+    // ままになる原因だった（新しい版へ進む方向しか通知しないので、
+    // APP_VERSION との比較だけでダウングレードは防げる）。
     if (!isNewerVersion(info.version, APP_VERSION)) return;
-    // ダウングレード防止（localStorage に最後適用バージョンを記録）
-    const applied = localStorage.getItem('serenova_applied_version') || '0';
-    if (!isNewerVersion(info.version, applied)) return;
-    setUpdateInfo(info);
+    if (__dismissedVersion === info.version) return;   // この起動中に「後で」を選んだ
+    // 親機のファイルが既に最新なら（他のPCが更新済み）、ダウンロードせず
+    // 再読み込みするだけでこの端末も最新になる。
+    const served = await getServedVersion();
+    setUpdateInfo({
+      ...info,
+      fromVersion: APP_VERSION,
+      mode: served === info.version ? 'reload' : 'download'
+    });
   } catch {/* オフライン等は無視 */}
 }
 
 // アップデートファイルのダウンロード＆適用
 async function downloadUpdate(info, setProgress) {
   try {
+    // 親機のファイルが既に最新（他のPCが更新済み）の場合は、
+    // ダウンロードも書き込みも不要。読み込み直すだけで最新になる。
+    if (info.mode === 'reload') {
+      setProgress('applying');
+      await waitForPendingSaves();
+      setProgress('done');
+      setTimeout(() => location.reload(), 1200);
+      return;
+    }
     setProgress('downloading');
     const ctrl = new AbortController();
     setTimeout(() => ctrl.abort(), 30000);
@@ -871,7 +914,9 @@ async function downloadUpdate(info, setProgress) {
       a.download = 'SmartSync.html';
       a.click();
       URL.revokeObjectURL(url);
-      localStorage.setItem('serenova_applied_version', info.version);
+      // ここでは「適用済み」として記録しない。ファイルを実際に差し替えるのは
+      // 人の手なので、差し替えるまでは次回も通知する必要がある
+      // （記録してしまうとその端末が更新されないまま放置される）。
       setProgress('downloaded');
     }
   } catch (e) {
@@ -2328,10 +2373,14 @@ function UpdateBanner({
   const label = {
     downloading: '⬇️ ダウンロード中...',
     verifying: '🔐 整合性確認中...',
-    applying: '💾 ファイル書き込み中...',
+    applying: info.mode === 'reload' ? '💾 保存の完了を待っています...' : '💾 ファイル書き込み中...',
     done: '✅ 更新完了！再起動します...',
     downloaded: '✅ 新しいファイルをダウンロードしました。差し替えてください。'
   }[progress] || null;
+  // 何世代遅れていても、ファイルごと入れ替わるのでこの1回で最新になる
+  const behind = info.fromVersion && info.fromVersion !== info.version
+    ? `v${info.fromVersion} → v${info.version} へ一気に更新します`
+    : null;
   return ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
     style: {
       position: 'fixed',
@@ -2366,7 +2415,20 @@ function UpdateBanner({
       fontWeight: 700,
       marginBottom: 4
     }
-  }, "アップデート利用可能 v", info.version), info.releaseNote && /*#__PURE__*/React.createElement("div", {
+  }, "アップデート利用可能 v", info.version), behind && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      fontWeight: 600,
+      marginBottom: 4,
+      opacity: .95
+    }
+  }, behind), info.mode === 'reload' && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      marginBottom: 6,
+      opacity: .85
+    }
+  }, "他のPCで更新済みです。読み込み直すだけで最新になります。"), info.releaseNote && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12,
       opacity: .85,
@@ -2403,7 +2465,7 @@ function UpdateBanner({
       cursor: busy ? 'default' : 'pointer',
       fontWeight: 600
     }
-  }, busy ? '処理中...' : '今すぐ更新'), !busy && /*#__PURE__*/React.createElement("button", {
+  }, busy ? '処理中...' : (info.mode === 'reload' ? '読み込み直して最新にする' : '今すぐ更新')), !busy && /*#__PURE__*/React.createElement("button", {
     onClick: onDismiss,
     style: {
       background: 'transparent',
@@ -6883,10 +6945,22 @@ function App() {
     };
   }, []);
 
-  // 起動時にアップデート確認（5秒遅延でスプラッシュ後に実行）
+  // アップデート確認。起動時の1回だけだと、付けっぱなしのPCが何日も
+  // 更新に気づかず何世代も遅れてしまうため、その後も定期的に確認する。
   useEffect(() => {
-    const tid = setTimeout(() => checkForUpdates(setUpdateInfo), 5000);
-    return () => clearTimeout(tid);
+    const check = () => checkForUpdates(setUpdateInfo);
+    const tid = setTimeout(check, 5000);                 // 起動直後（スプラッシュ後）
+    const iid = setInterval(check, 30 * 60 * 1000);      // 以後30分ごと
+    // 画面に戻ってきた時にも確認する（他のPCが更新した直後に気づける）
+    const onWake = () => { if (document.visibilityState === 'visible') check(); };
+    document.addEventListener('visibilitychange', onWake);
+    window.addEventListener('focus', onWake);
+    return () => {
+      clearTimeout(tid);
+      clearInterval(iid);
+      document.removeEventListener('visibilitychange', onWake);
+      window.removeEventListener('focus', onWake);
+    };
   }, []);
 
   // サーバーから受け取ったデータを画面へ反映する。版番号(rev)も必ず一緒に
@@ -7235,7 +7309,11 @@ function App() {
     remove: removeToast
   }), /*#__PURE__*/React.createElement(UpdateBanner, {
     info: updateInfo,
-    onDismiss: () => setUpdateInfo(null)
+    onDismiss: () => {
+      // この起動中は同じバージョンを再通知しない（次回起動時はまた出る）
+      if (updateInfo) __dismissedVersion = updateInfo.version;
+      setUpdateInfo(null);
+    }
   }), splashPhase !== 'done' && ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
     id: "splash-screen",
     className: splashPhase === 'out' ? 'out' : ''

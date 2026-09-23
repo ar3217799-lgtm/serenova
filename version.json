@@ -1,7 +1,7 @@
 {
-  "version": "2.13.1",
+  "version": "2.14.0",
   "fileUrl": "https://ar3217799-lgtm.github.io/serenova/SmartSync.html",
-  "sha256": "bef8b840d14a070cbb6fbe47c0886028c3c535f0b6793acf02615a177f5f0eff",
-  "releaseNote": "親機の再起動やネットワーク断で保存できなかった入力を、通信の回復後に自動で保存し直すように",
+  "sha256": "f45b01fc49deb8b82f805d2f645bb751975e26e7ff4eff5dce641a575e25f69f",
+  "releaseNote": "更新に気づかず何世代も遅れる問題を解消。定期的に更新を確認し、何世代遅れていても1回で最新になります。他のPCが更新済みの場合は読み込み直すだけで最新になります",
   "releaseDate": "2026-09-23"
 }
