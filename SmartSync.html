@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.14.1';
+const APP_VERSION = '2.15.0';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -1218,6 +1218,8 @@ const today = () => toLocalDateStr(new Date());
 const fmtDate = d => d ? d.replace(/-/g, '/') : '';
 // 退院日を過ぎたら表示上は入院中扱いから外す（入退院の記録自体は保持したまま）
 const isHospitalizedNow = u => !!(u.hospitalized && u.hospitalizedSince && (!u.dischargedDate || u.dischargedDate >= today()));
+// 終了日を過ぎたら表示上は長期休み扱いから外す（記録自体は保持したまま）
+const isLongAbsenceNow = u => !!(u.longAbsence && u.longAbsenceSince && (!u.longAbsenceEndDate || u.longAbsenceEndDate >= today()));
 const getDOW = s => {
   if (!s) return '';
   const d = new Date(s);
@@ -1851,6 +1853,25 @@ function checkContradictions(data) {
         canRemoveAttendance: attExists,
         message: `【矛盾】${u.name} さん — ${fmtDate(k.date)} : 利用中止（${fmtDate(u.discontinuedSince)}〜）のはずですがカルテが存在します。`,
         detail: `解消: 右の「🗑️ カルテを削除」ボタンで削除するか、利用者管理で利用中止設定を確認してください。`
+      });
+    });
+  });
+
+  /* 9. 長期休み中の利用者にカルテが存在する（開始日〜終了日、終了日未定なら期限なし） */
+  data.users.forEach(u => {
+    if (!u.longAbsence || !u.longAbsenceSince) return;
+    (data.karteRecords || []).filter(k => k.userName === u.name && k.date >= u.longAbsenceSince && (!u.longAbsenceEndDate || k.date <= u.longAbsenceEndDate)).forEach(k => {
+      const att = data.dailyAttendance.find(a => a.date === k.date);
+      const attExists = !!(att && att.entries.some(e => e.userName === u.name));
+      issues.push({
+        type: 'error',
+        fix: 'karte',
+        fixType: 'delete_karte',
+        userName: u.name,
+        date: k.date,
+        canRemoveAttendance: attExists,
+        message: `【矛盾】${u.name} さん — ${fmtDate(k.date)} : 長期休み（${fmtDate(u.longAbsenceSince)}〜${u.longAbsenceEndDate ? fmtDate(u.longAbsenceEndDate) : ''}${u.longAbsenceReason ? '　' + u.longAbsenceReason : ''}）のはずですがカルテが存在します。`,
+        detail: `解消: 右の「🗑️ カルテを削除」ボタンで削除するか、利用者管理で長期休みの設定を確認してください。`
       });
     });
   });
@@ -2930,6 +2951,10 @@ function UserManagement({
         hospitalized: false,
         hospitalizedSince: '',
         dischargedDate: '',
+        longAbsence: false,
+        longAbsenceSince: '',
+        longAbsenceEndDate: '',
+        longAbsenceReason: '',
         discontinued: false,
         discontinuedSince: '',
         dayHistory: []
@@ -3217,6 +3242,105 @@ function UserManagement({
         style: {
           flex: 1,
           minWidth: 200,
+          background: f.longAbsence ? 'rgba(124,58,237,.06)' : 'rgba(124,58,237,.03)',
+          border: `1px solid ${f.longAbsence ? 'rgba(124,58,237,.35)' : 'rgba(124,58,237,.15)'}`,
+          borderRadius: 8,
+          padding: '10px 14px'
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          marginBottom: f.longAbsence ? 10 : 0
+        }
+      }, /*#__PURE__*/React.createElement("label", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          cursor: 'pointer',
+          userSelect: 'none'
+        }
+      }, /*#__PURE__*/React.createElement("input", {
+        type: "checkbox",
+        checked: !!f.longAbsence,
+        onChange: e => setF(p => ({
+          ...p,
+          longAbsence: e.target.checked,
+          longAbsenceSince: e.target.checked ? p.longAbsenceSince || today() : p.longAbsenceSince
+        })),
+        style: {
+          width: 16,
+          height: 16,
+          accentColor: '#7c3aed'
+        }
+      }), /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontWeight: 600,
+          color: f.longAbsence ? '#7c3aed' : 'var(--text2)',
+          fontSize: 13
+        }
+      }, "🌙 長期休み（その他理由）"))), f.longAbsence && /*#__PURE__*/React.createElement("div", {
+        className: "form-group",
+        style: {
+          marginBottom: 0
+        }
+      }, /*#__PURE__*/React.createElement("label", {
+        className: "form-label"
+      }, "開始日"), /*#__PURE__*/React.createElement("input", {
+        type: "date",
+        className: "form-input",
+        style: {
+          maxWidth: 180
+        },
+        value: f.longAbsenceSince || '',
+        onChange: e => setF(p => ({
+          ...p,
+          longAbsenceSince: e.target.value
+        }))
+      }), /*#__PURE__*/React.createElement("div", {
+        style: {
+          marginTop: 8
+        }
+      }, /*#__PURE__*/React.createElement("label", {
+        className: "form-label"
+      }, "理由"), /*#__PURE__*/React.createElement("input", {
+        type: "text",
+        className: "form-input",
+        placeholder: "例: 骨折のため自宅療養中",
+        value: f.longAbsenceReason || '',
+        onChange: e => setF(p => ({
+          ...p,
+          longAbsenceReason: e.target.value
+        }))
+      })), /*#__PURE__*/React.createElement("div", {
+        style: {
+          marginTop: 8
+        }
+      }, /*#__PURE__*/React.createElement("label", {
+        className: "form-label"
+      }, "終了日（決まったら入力）"), /*#__PURE__*/React.createElement("input", {
+        type: "date",
+        className: "form-input",
+        style: {
+          maxWidth: 180
+        },
+        value: f.longAbsenceEndDate || '',
+        onChange: e => setF(p => ({
+          ...p,
+          longAbsenceEndDate: e.target.value
+        }))
+      }), /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 11,
+          color: 'var(--text3)',
+          marginTop: 4
+        }
+      }, "終了日を入力するまで、利用予定日ごとに連絡ノートへ理由を添えて自動でお休みの記録が積み増されます。")))), /*#__PURE__*/React.createElement("div", {
+        style: {
+          flex: 1,
+          minWidth: 200,
           background: f.discontinued ? 'rgba(107,114,128,.08)' : 'rgba(107,114,128,.04)',
           border: `1px solid ${f.discontinued ? 'rgba(107,114,128,.4)' : 'rgba(107,114,128,.2)'}`,
           borderRadius: 8,
@@ -3274,13 +3398,13 @@ function UserManagement({
           ...p,
           discontinuedSince: e.target.value
         }))
-      })))), (f.hospitalized || f.discontinued) && /*#__PURE__*/React.createElement("div", {
+      })))), (f.hospitalized || f.longAbsence || f.discontinued) && /*#__PURE__*/React.createElement("div", {
         style: {
           marginTop: 8,
           fontSize: 11,
           color: 'var(--text3)'
         }
-      }, f.discontinued ? '利用中止中は曜日マスタへの表示・当日入力から除外されます（この期間にカルテがあると矛盾チェックで警告されます）' : '入院中はマスタや矛盾チェックから除外されます')), /*#__PURE__*/React.createElement("div", {
+      }, f.discontinued ? '利用中止中は曜日マスタへの表示・当日入力から除外されます（この期間にカルテがあると矛盾チェックで警告されます）' : '入院中・長期休みはマスタや矛盾チェックから除外されます')), /*#__PURE__*/React.createElement("div", {
         style: {
           border: '1px solid var(--border)',
           borderRadius: 10,
@@ -3645,7 +3769,7 @@ function UserManagement({
       return /*#__PURE__*/React.createElement("tr", {
         key: u.id,
         style: {
-          opacity: isHospitalizedNow(u) || u.discontinued ? 0.65 : 1
+          opacity: isHospitalizedNow(u) || isLongAbsenceNow(u) || u.discontinued ? 0.65 : 1
         }
       }, /*#__PURE__*/React.createElement("td", {
         style: {
@@ -3680,7 +3804,19 @@ function UserManagement({
           border: '1px solid rgba(239,68,68,.3)',
           whiteSpace: 'nowrap'
         }
-      }, "🏥 入院中", u.hospitalizedSince ? `（${fmtDate(u.hospitalizedSince)}〜）` : '') : /*#__PURE__*/React.createElement("span", {
+      }, "🏥 入院中", u.hospitalizedSince ? `（${fmtDate(u.hospitalizedSince)}〜）` : '') : isLongAbsenceNow(u) ? /*#__PURE__*/React.createElement("span", {
+        style: {
+          display: 'inline-block',
+          padding: '2px 8px',
+          borderRadius: 20,
+          fontSize: 11,
+          fontWeight: 700,
+          background: 'rgba(124,58,237,.12)',
+          color: '#7c3aed',
+          border: '1px solid rgba(124,58,237,.3)',
+          whiteSpace: 'nowrap'
+        }
+      }, "🌙 長期休み", u.longAbsenceSince ? `（${fmtDate(u.longAbsenceSince)}〜）` : '', u.longAbsenceReason ? ` ${u.longAbsenceReason}` : '') : /*#__PURE__*/React.createElement("span", {
         style: {
           display: 'inline-block',
           padding: '2px 8px',
@@ -3739,7 +3875,7 @@ function UserManagement({
     const entries = data.dayMasters[day] || [];
     const registered = new Set(entries.map(e => e.userName));
     // 利用中止・入院中ユーザーは追加候補から除外
-    const unassigned = sortByKana(data.users.filter(u => !registered.has(u.name) && !u.discontinued && !isHospitalizedNow(u)));
+    const unassigned = sortByKana(data.users.filter(u => !registered.has(u.name) && !u.discontinued && !isHospitalizedNow(u) && !isLongAbsenceNow(u)));
     // 利用中止ユーザーはマスタ表から非表示（データは保持）
     const userMap = Object.fromEntries(data.users.map(u => [u.name, u]));
     // [entry, realIndex] のペアで保持し、表示番号と実インデックスを分離
@@ -7075,68 +7211,92 @@ function App() {
     }
   }, [data.users.map(u => (u.id || '') + (u.name || '')).join(',')]);
 
-  // 入院中の利用者は、退院日が入るまで利用予定日ごとに連絡ノートへ
-  // 「休み」記録を自動で積み増す（日付が経つほど、開くたびに追いつく）。
-  // ただし利用終了（利用中止）していれば、その日以降は入院中かどうかに
-  // 関わらず何も記録しない（生成を止めるだけでなく、利用終了より前に
-  // 誤って生成済みのものがあれば削除する）。
-  const AUTO_ABSENCE_DETAIL = '入院中のためお休みです';
+  // 入院中・長期休み（その他理由）の利用者は、終了日が入るまで利用予定日
+  // ごとに連絡ノートへ「休み」記録を自動で積み増す（日付が経つほど、
+  // 開くたびに追いつく）。ただし利用終了（利用中止）していれば、その日
+  // 以降は入院中・長期休みかどうかに関わらず何も記録しない（生成を
+  // 止めるだけでなく、利用終了より前に誤って生成済みのものがあれば削除する）。
+  const AUTO_HOSPITAL_DETAIL = '入院中のためお休みです';
   useEffect(() => {
-    const hospitalizedUsers = data.users.filter(u => u.hospitalized && u.hospitalizedSince);
     const discontinuedMap = Object.fromEntries(
       data.users.filter(u => u.discontinued && u.discontinuedSince).map(u => [u.name, u.discontinuedSince])
     );
     const todayStr = today();
-    const newNotes = [];
-    hospitalizedUsers.forEach(u => {
-      let endDate = u.dischargedDate && u.dischargedDate < todayStr ? u.dischargedDate : todayStr;
-      const cutoff = discontinuedMap[u.name];
-      if (cutoff && cutoff <= endDate) {
-        const before = new Date(cutoff + 'T00:00:00');
-        before.setDate(before.getDate() - 1);
-        endDate = toLocalDateStr(before);
+    // 入院中／長期休み、いずれも「開始日・終了日・お休み理由の文言」が
+    // 揃えば同じ積み増しロジックで処理できるため、一本化する。
+    const sources = [];
+    data.users.forEach(u => {
+      if (u.hospitalized && u.hospitalizedSince) {
+        sources.push({ name: u.name, since: u.hospitalizedSince, endDate: u.dischargedDate || '', detail: AUTO_HOSPITAL_DETAIL });
       }
-      if (endDate < u.hospitalizedSince) return;
-      const registeredDays = DAYS.filter(d => (data.dayMasters[d] || []).some(dm => dm.userName === u.name));
-      if (!registeredDays.length) return;
-      let cur = new Date(u.hospitalizedSince + 'T00:00:00');
-      const end = new Date(endDate + 'T00:00:00');
-      while (cur <= end) {
-        const dateStr = toLocalDateStr(cur);
-        if (registeredDays.includes(getDOW(dateStr))) {
-          const exists = data.contactNotes.some(n => n.userName === u.name && n.targetDate === dateStr && n.category === '休み');
-          if (!exists) {
-            newNotes.push({
-              id: uid(),
-              recordDate: todayStr,
-              userName: u.name,
-              contactFrom: '',
-              targetDate: dateStr,
-              category: '休み',
-              details: AUTO_ABSENCE_DETAIL,
-              reporter: ''
-            });
-          }
-        }
-        cur.setDate(cur.getDate() + 1);
+      if (u.longAbsence && u.longAbsenceSince) {
+        const reason = (u.longAbsenceReason || '').trim();
+        sources.push({ name: u.name, since: u.longAbsenceSince, endDate: u.longAbsenceEndDate || '', detail: reason ? `${reason}のためお休みです` : '長期のお休みです' });
       }
     });
-    // 利用終了より前に自動生成されてしまった分を削除する（この自動生成が
-    // 作った印である category/details の組み合わせのものだけを対象にし、
-    // スタッフが個別に入力した連絡ノートには触れない）。
-    const staleIds = new Set(
-      data.contactNotes
-        .filter(n => n.category === '休み' && n.details === AUTO_ABSENCE_DETAIL
-          && discontinuedMap[n.userName] && n.targetDate >= discontinuedMap[n.userName])
-        .map(n => n.id)
-    );
-    if (newNotes.length || staleIds.size) {
-      setData(p => ({
+    if (!sources.length) return;
+    // 利用者登録の保存は「利用者一覧」と「曜日マスタ」を別々の setData
+    // 呼び出しで行うため、この effect が数百ms の間に2〜3回続けて発火する
+    // ことがある。それぞれが独立にサーバーへ保存→競合→再取得して再適用、
+    // を行うと、互いに相手の「まだサーバーに届いていない追加」を知らない
+    // まま同じ日付のノートを重複して作ってしまう（実際に発生を確認した）。
+    // 一定時間ようすを見て、その間に発火し直されなかった最後の1回だけを
+    // 実行することで、関連する保存がひと通り落ち着いてから判定する。
+    const timer = setTimeout(() => {
+    setData(p => {
+      const staleIds = new Set(
+        p.contactNotes
+          .filter(n => n.category === '休み' && (n.auto === true || n.details === AUTO_HOSPITAL_DETAIL)
+            && discontinuedMap[n.userName] && n.targetDate >= discontinuedMap[n.userName])
+          .map(n => n.id)
+      );
+      const kept = p.contactNotes.filter(n => !staleIds.has(n.id));
+      const existingKeys = new Set(kept.filter(n => n.category === '休み').map(n => `${n.userName} ${n.targetDate}`));
+      const newNotes = [];
+      sources.forEach(src => {
+        let endDate = src.endDate && src.endDate < todayStr ? src.endDate : todayStr;
+        const cutoff = discontinuedMap[src.name];
+        if (cutoff && cutoff <= endDate) {
+          const before = new Date(cutoff + 'T00:00:00');
+          before.setDate(before.getDate() - 1);
+          endDate = toLocalDateStr(before);
+        }
+        if (endDate < src.since) return;
+        const registeredDays = DAYS.filter(d => (data.dayMasters[d] || []).some(dm => dm.userName === src.name));
+        if (!registeredDays.length) return;
+        let cur = new Date(src.since + 'T00:00:00');
+        const end = new Date(endDate + 'T00:00:00');
+        while (cur <= end) {
+          const dateStr = toLocalDateStr(cur);
+          if (registeredDays.includes(getDOW(dateStr))) {
+            const key = `${src.name} ${dateStr}`;
+            if (!existingKeys.has(key)) {
+              existingKeys.add(key);
+              newNotes.push({
+                id: uid(),
+                recordDate: todayStr,
+                userName: src.name,
+                contactFrom: '',
+                targetDate: dateStr,
+                category: '休み',
+                details: src.detail,
+                auto: true,
+                reporter: ''
+              });
+            }
+          }
+          cur.setDate(cur.getDate() + 1);
+        }
+      });
+      if (!newNotes.length && kept.length === p.contactNotes.length) return p; // 変化なし
+      return {
         ...p,
-        contactNotes: [...p.contactNotes.filter(n => !staleIds.has(n.id)), ...newNotes]
-      }));
-    }
-  }, [data.users.map(u => `${u.id}:${u.hospitalized}:${u.hospitalizedSince}:${u.dischargedDate}:${u.discontinued}:${u.discontinuedSince}`).join(','), JSON.stringify(data.dayMasters)]);
+        contactNotes: [...kept, ...newNotes]
+      };
+    });
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [data.users.map(u => `${u.id}:${u.hospitalized}:${u.hospitalizedSince}:${u.dischargedDate}:${u.longAbsence}:${u.longAbsenceSince}:${u.longAbsenceEndDate}:${u.longAbsenceReason}:${u.discontinued}:${u.discontinuedSince}`).join(','), JSON.stringify(data.dayMasters)]);
 
   // トースト登録 → モジュールレベル関数からアクセス可能にする
   useEffect(() => {

@@ -1,7 +1,7 @@
 {
-  "version": "2.14.1",
+  "version": "2.15.0",
   "fileUrl": "https://ar3217799-lgtm.github.io/serenova/SmartSync.html",
-  "sha256": "3c6f1ba0e118de4f651c240cbcbaf42861f2ced8c71cffe13807c276919f8e34",
-  "releaseNote": "利用終了後は入院中の自動休み記録を作らないように修正（既に作られていた分も削除）。日本時間で日付が1日ずれる不具合も修正",
+  "sha256": "165f2c85ca8d12e24dfc954b3db7742fd54fc1720b2320ca4df173f1850f134d",
+  "releaseNote": "利用者管理に「長期休み（その他理由）」を追加。開始日と理由を入力すると入院中と同じ仕組みで連絡ノートへ自動反映されます",
   "releaseDate": "2026-09-23"
 }
