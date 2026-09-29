@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.15.0';
+const APP_VERSION = '2.15.1';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -1668,6 +1668,22 @@ const exportBulkContactNotes = (allNotes, month) => {
 function checkContradictions(data) {
   const issues = [];
   const karteRecords = data.karteRecords || [];
+  const usersByName = Object.fromEntries((data.users || []).map(u => [u.name, u]));
+  // ある日付の時点で、その利用者が実際に登録されていた曜日を返す。
+  // 「利用日変更履歴」があれば対象日以前の直近の変更を優先し、現在の
+  // 曜日マスタ（未来の変更が反映済み）で過去の来所を誤って矛盾判定
+  // しないようにする。対象日がどの履歴よりも前で当時の曜日が分からない
+  // 場合は null を返し、呼び出し側で判定をスキップさせる。
+  function registeredDaysAsOf(userName, dateStr) {
+    const user = usersByName[userName];
+    const hist = user?.dayHistory || [];
+    if (hist.length) {
+      const applicable = hist.filter(h => h.date <= dateStr).sort((a, b) => b.date.localeCompare(a.date))[0];
+      if (applicable) return applicable.days || [];
+      return null; // 最古の変更履歴より前 → 当時の曜日は不明
+    }
+    return DAYS.filter(d => (data.dayMasters[d] || []).some(dm => dm.userName === userName));
+  }
 
   /* 1. 休み連絡 ↔ 来所記録の矛盾
      ① カルテが存在する → 確実な来所証拠 → ERROR（カルテ削除 or 連絡ノート修正で解消）
@@ -1710,14 +1726,18 @@ function checkContradictions(data) {
     }
   });
 
-  /* 2. 登録曜日外の来所（振替なし・隔週スキップ日は除外） */
+  /* 2. 登録曜日外の来所（振替なし・隔週スキップ日は除外）
+        曜日を変更した利用者は、変更日より前の来所を「利用日変更履歴」に
+        記録された当時の曜日で判定する（現在の曜日マスタだけで判定すると、
+        変更前の正しい来所が誤って矛盾として検出されてしまうため）。 */
   data.dailyAttendance.forEach(att => {
     const dow = getDOW(att.date);
     const weekNum = getWeekOfMonth(att.date);
     att.entries.forEach(entry => {
       if (!entry.userName || entry.substituteDay) return;
-      const dmEntry = (data.dayMasters[dow] || []).find(dm => dm.userName === entry.userName);
-      if (!dmEntry) {
+      const asOfDays = registeredDaysAsOf(entry.userName, att.date);
+      if (asOfDays === null) return; // 最古の変更履歴より前で当時の曜日が不明 → 判定しない
+      if (!asOfDays.includes(dow)) {
         const registeredDays = DAYS.filter(d => (data.dayMasters[d] || []).some(dm => dm.userName === entry.userName));
         issues.push({
           type: 'warning',
@@ -1730,7 +1750,8 @@ function checkContradictions(data) {
         });
       } else {
         // 隔週設定なのに来所している場合はスキップ（振替で来所の可能性があるため警告しない）
-        const sw = dmEntry.scheduleWeeks;
+        const dmEntry = (data.dayMasters[dow] || []).find(dm => dm.userName === entry.userName);
+        const sw = dmEntry?.scheduleWeeks;
         const isAllWeeks = !sw || sw.length === 0 || sw.length >= 5;
         if (!isAllWeeks && !sw.includes(weekNum)) {
           // 利用対象外週に来所 → 振替として扱い警告なし
