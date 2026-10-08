@@ -1,7 +1,7 @@
 {
-  "version": "2.15.1",
+  "version": "2.15.2",
   "fileUrl": "https://ar3217799-lgtm.github.io/serenova/SmartSync.html",
-  "sha256": "cc74518b82b46f14e00f41584f58bcda738d4fb676ebdff8c83d1ca6b0c6b7b7",
-  "releaseNote": "利用曜日を変更した利用者について、変更日より前の正しい来所が「登録曜日外」として誤って矛盾チェックに出てしまう不具合を修正",
-  "releaseDate": "2026-09-29"
+  "sha256": "d40d4d8c2ac6a3688f1ea0c804c6da7bb6a8de0e8203c5ef88f2d6d92b45a72b",
+  "releaseNote": "利用者マスタの曜日に名前があるのに「曜日マスタに未登録です」と表示されることがある不具合を修正（利用日変更履歴が古いまま残っていると、最新の曜日マスタより優先されていたため）。履歴は最終変更日より前の来所にだけ使い、それ以降は現在の曜日マスタで判定します",
+  "releaseDate": "2026-10-08"
 }
