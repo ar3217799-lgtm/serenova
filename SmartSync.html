@@ -1670,19 +1670,25 @@ function checkContradictions(data) {
   const karteRecords = data.karteRecords || [];
   const usersByName = Object.fromEntries((data.users || []).map(u => [u.name, u]));
   // ある日付の時点で、その利用者が実際に登録されていた曜日を返す。
-  // 「利用日変更履歴」があれば対象日以前の直近の変更を優先し、現在の
-  // 曜日マスタ（未来の変更が反映済み）で過去の来所を誤って矛盾判定
-  // しないようにする。対象日がどの履歴よりも前で当時の曜日が分からない
-  // 場合は null を返し、呼び出し側で判定をスキップさせる。
+  // 「利用日変更履歴」は、曜日を変えた「前」の来所を、変更後の現在の曜日
+  // マスタで誤って矛盾判定しないためのもの。履歴の最終変更日より前の日付
+  // だけに適用し、最終変更日以降は現在の曜日マスタを正とする。
+  // （履歴はスタッフが手で書くログで曜日マスタとは連動しない。履歴を書いた
+  //   後にマスタだけ変更されると、履歴の曜日が古いままになり、マスタに名前が
+  //   あるのに「未登録」と誤判定されるため）
+  // 対象日がどの履歴よりも前で当時の曜日が分からない場合は days:null を返し、
+  // 呼び出し側で判定をスキップさせる。since は判定に使った履歴の日付（なければ ''）。
   function registeredDaysAsOf(userName, dateStr) {
     const user = usersByName[userName];
-    const hist = user?.dayHistory || [];
-    if (hist.length) {
-      const applicable = hist.filter(h => h.date <= dateStr).sort((a, b) => b.date.localeCompare(a.date))[0];
-      if (applicable) return applicable.days || [];
-      return null; // 最古の変更履歴より前 → 当時の曜日は不明
-    }
-    return DAYS.filter(d => (data.dayMasters[d] || []).some(dm => dm.userName === userName));
+    const hist = [...(user?.dayHistory || [])].sort((a, b) => a.date.localeCompare(b.date));
+    const current = () => ({
+      days: DAYS.filter(d => (data.dayMasters[d] || []).some(dm => dm.userName === userName)),
+      since: ''
+    });
+    if (!hist.length || dateStr >= hist[hist.length - 1].date) return current();
+    const applicable = hist.filter(h => h.date <= dateStr).pop();
+    if (applicable) return { days: applicable.days || [], since: applicable.date };
+    return { days: null, since: '' }; // 最古の変更履歴より前 → 当時の曜日は不明
   }
 
   /* 1. 休み連絡 ↔ 来所記録の矛盾
@@ -1735,10 +1741,11 @@ function checkContradictions(data) {
     const weekNum = getWeekOfMonth(att.date);
     att.entries.forEach(entry => {
       if (!entry.userName || entry.substituteDay) return;
-      const asOfDays = registeredDaysAsOf(entry.userName, att.date);
+      const asOf = registeredDaysAsOf(entry.userName, att.date);
+      const asOfDays = asOf.days;
       if (asOfDays === null) return; // 最古の変更履歴より前で当時の曜日が不明 → 判定しない
       if (!asOfDays.includes(dow)) {
-        const registeredDays = DAYS.filter(d => (data.dayMasters[d] || []).some(dm => dm.userName === entry.userName));
+        const registeredDays = asOfDays;
         issues.push({
           type: 'warning',
           fix: 'users',
@@ -1746,7 +1753,7 @@ function checkContradictions(data) {
           userName: entry.userName,
           date: att.date,
           message: `【注意】${entry.userName} さん — ${fmtDate(att.date)}（${dow}曜日）は${dow}曜日マスタに未登録です。`,
-          detail: `登録曜日: ${registeredDays.length ? registeredDays.join('・') : 'なし'} ／ 解消: 利用者管理 →「${dow}曜日マスタ」に追加 or 当日入力で振替設定`
+          detail: `登録曜日${asOf.since ? '（利用日変更履歴にもとづく当時の曜日）' : ''}: ${registeredDays.length ? registeredDays.join('・') : 'なし'} ／ 解消: 利用者管理 →「${dow}曜日マスタ」に追加 or 当日入力で振替設定`
         });
       } else {
         // 隔週設定なのに来所している場合はスキップ（振替で来所の可能性があるため警告しない）
