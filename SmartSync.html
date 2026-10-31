@@ -2859,1424 +2859,1446 @@ function DeviceManagement() {
             }, "削除")))))))
   );
 }
+/* 利用者管理の各タブ・入力フォームは、UserManagement の中で定義すると
+   描画のたびに別のコンポーネント扱いになり、他のPCの保存を取り込んだ瞬間に
+   入力途中のフォームが閉じて内容が消えていた。外側に定義して data/setData を受け取る。 */
+function BulkImportModal({
+  data,
+  setData,
+  onClose
+}) {
+  const [text, setText] = useState('');
+  const parsed = text.split(/\r?\n/).map(row => row.split('\t')[0].trim()).filter(s => s.length > 0);
+  const existingNames = new Set(data.users.map(u => u.name));
+  const newNames = [...new Set(parsed)].filter(n => !existingNames.has(n));
+  const dupNames = [...new Set(parsed)].filter(n => existingNames.has(n));
+  const doImport = () => {
+    if (!newNames.length) return;
+    setData(p => ({
+      ...p,
+      users: [...p.users, ...newNames.map(n => ({
+        id: uid(),
+        name: n,
+        kana: '',
+        notes: ''
+      }))]
+    }));
+    showToast(`${newNames.length}名を登録しました`, 'ok');
+    onClose();
+  };
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: "利用者 一括インポート",
+    onClose: onClose,
+    wide: true
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "form-group"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "名前を貼り付け（Excelからコピー可）"), /*#__PURE__*/React.createElement("textarea", {
+    className: "form-textarea",
+    style: {
+      minHeight: 160,
+      fontFamily: 'monospace',
+      fontSize: 13
+    },
+    placeholder: "山田 太郎\n鈴木 花子\n田中 一郎\n\n※ Excelのセルをそのままコピペできます（複数列の場合は1列目の名前のみ取得）",
+    value: text,
+    onChange: e => setText(e.target.value),
+    autoFocus: true
+  })), parsed.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 14
+    }
+  }, newNames.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: 'rgba(22,163,74,.07)',
+      border: '1px solid rgba(22,163,74,.25)',
+      borderRadius: 8,
+      padding: '10px 14px',
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      color: 'var(--ok)',
+      marginBottom: 6,
+      fontSize: 12
+    }
+  }, "✅ 新規追加 ", newNames.length, "名"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 6
+    }
+  }, newNames.map((n, i) => /*#__PURE__*/React.createElement("span", {
+    key: i,
+    style: {
+      background: 'rgba(22,163,74,.15)',
+      color: 'var(--ok)',
+      borderRadius: 20,
+      padding: '2px 10px',
+      fontSize: 12,
+      fontWeight: 600
+    }
+  }, n)))), dupNames.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: 'rgba(217,119,6,.07)',
+      border: '1px solid rgba(217,119,6,.25)',
+      borderRadius: 8,
+      padding: '10px 14px'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      color: 'var(--warn)',
+      marginBottom: 6,
+      fontSize: 12
+    }
+  }, "⚠️ 既に登録済み（スキップ） ", dupNames.length, "名"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 6
+    }
+  }, dupNames.map((n, i) => /*#__PURE__*/React.createElement("span", {
+    key: i,
+    style: {
+      background: 'rgba(217,119,6,.12)',
+      color: 'var(--warn)',
+      borderRadius: 20,
+      padding: '2px 10px',
+      fontSize: 12,
+      fontWeight: 600
+    }
+  }, n))))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      justifyContent: 'flex-end',
+      marginTop: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost",
+    onClick: onClose
+  }, "キャンセル"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-gold",
+    onClick: doImport,
+    disabled: newNames.length === 0
+  }, "📋 ", newNames.length, "名を一括登録")));
+}
+
+function UserForm({
+  data,
+  setData,
+  init,
+  onClose
+}) {
+  const kanaAccumRef = useRef(init?.kana || '');
+  const compKanaRef = useRef('');
+  const [f, setF] = useState(init || {
+    name: '',
+    kana: '',
+    notes: '',
+    hospitalized: false,
+    hospitalizedSince: '',
+    dischargedDate: '',
+    longAbsence: false,
+    longAbsenceSince: '',
+    longAbsenceEndDate: '',
+    longAbsenceReason: '',
+    discontinued: false,
+    discontinuedSince: '',
+    dayHistory: []
+  });
+  const [newHist, setNewHist] = useState({
+    date: today(),
+    days: [],
+    memo: ''
+  });
+  const [showHistForm, setShowHistForm] = useState(false);
+  const toggleDay = d => setNewHist(p => ({
+    ...p,
+    days: p.days.includes(d) ? p.days.filter(x => x !== d) : [...p.days, d]
+  }));
+
+  // 利用曜日・サービス内容（保存時に各曜日マスタへ自動反映する）
+  const [svc, setSvc] = useState(() => {
+    if (!init) return {
+      useDays: [],
+      bath: false,
+      bathMethod: '',
+      toiletAssist: false,
+      rehabCategory: '',
+      scheduleWeeks: [1, 2, 3, 4, 5]
+    };
+    const useDays = DAYS.filter(d => (data.dayMasters[d] || []).some(e => e.userName === init.name));
+    let rep = null;
+    for (const d of useDays) {
+      rep = (data.dayMasters[d] || []).find(e => e.userName === init.name);
+      if (rep) break;
+    }
+    return {
+      useDays,
+      bath: rep?.bath || false,
+      bathMethod: rep?.bathMethod || '',
+      toiletAssist: rep?.toiletAssist || false,
+      rehabCategory: rep?.rehabCategory || '',
+      scheduleWeeks: rep?.scheduleWeeks || [1, 2, 3, 4, 5]
+    };
+  });
+  const toggleUseDay = d => setSvc(p => ({
+    ...p,
+    useDays: p.useDays.includes(d) ? p.useDays.filter(x => x !== d) : [...p.useDays, d]
+  }));
+  const addHistory = () => {
+    if (!newHist.date) return;
+    const entry = {
+      id: uid(),
+      ...newHist
+    };
+    setF(p => ({
+      ...p,
+      dayHistory: [...(p.dayHistory || []), entry].sort((a, b) => a.date.localeCompare(b.date))
+    }));
+    setNewHist({
+      date: today(),
+      days: [],
+      memo: ''
+    });
+    setShowHistForm(false);
+  };
+  const delHistory = id => setF(p => ({
+    ...p,
+    dayHistory: (p.dayHistory || []).filter(h => h.id !== id)
+  }));
+  const save = () => {
+    if (!f.name.trim()) return;
+    const userName = f.name.trim();
+    const oldName = init?.name; // 改名時、旧名で登録済みの曜日マスタを追跡するため
+    // 入院中の連絡ノートは、保存後にApp側のuseEffectが利用予定日ごとに
+    // 自動で積み増す（ここでは何もしない。退院日が入るまで日付が経つほど増える）
+    if (init) {
+      setData(p => ({
+        ...p,
+        users: p.users.map(u => u.id === init.id ? {
+          ...u,
+          ...f,
+          name: userName
+        } : u)
+      }));
+    } else {
+      setData(p => ({
+        ...p,
+        users: [...p.users, {
+          id: uid(),
+          ...f,
+          name: userName
+        }]
+      }));
+    }
+    // 利用曜日・サービス内容を各曜日マスタへ自動反映（選択した曜日は追加/更新、外した曜日は削除）
+    setData(p => {
+      const dm = {
+        ...p.dayMasters
+      };
+      DAYS.forEach(d => {
+        const cur = dm[d] || [];
+        const matchName = oldName || userName;
+        const idx = cur.findIndex(e => e.userName === matchName);
+        if (svc.useDays.includes(d)) {
+          const merged = {
+            ...(idx >= 0 ? cur[idx] : {}),
+            userName,
+            bath: svc.bath,
+            bathMethod: svc.bath ? svc.bathMethod : '',
+            toiletAssist: svc.toiletAssist,
+            rehabCategory: svc.rehabCategory,
+            scheduleWeeks: svc.scheduleWeeks
+          };
+          dm[d] = idx >= 0 ? cur.map((e, i) => i === idx ? merged : e) : [...cur, merged];
+        } else if (idx >= 0) {
+          dm[d] = cur.filter((_, i) => i !== idx);
+        }
+      });
+      return {
+        ...p,
+        dayMasters: dm
+      };
+    });
+    onClose();
+  };
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: init ? '利用者編集' : '利用者登録',
+    onClose: onClose,
+    wide: true
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid-2"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      gridColumn: '1/-1'
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "利用者名 *"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    value: f.name,
+    onChange: e => {
+      const v = e.target.value;
+      if (!v) kanaAccumRef.current = '';
+      setF(p => ({...p, name: v, kana: kanaAccumRef.current}));
+    },
+    onCompositionUpdate: e => { compKanaRef.current = e.data; },
+    onCompositionEnd: () => {
+      kanaAccumRef.current += compKanaRef.current;
+      compKanaRef.current = '';
+      setF(p => ({...p, kana: kanaAccumRef.current}));
+    },
+    placeholder: "氏名（日本語入力で変換するとふりがな自動設定）"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      gridColumn: '1/-1'
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "ふりがな"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    value: f.kana || '',
+    onChange: e => setF(p => ({...p, kana: e.target.value, kanaManual: true})),
+    placeholder: "五十音順の並びに使われます（読みが違う場合はここで修正）"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      gridColumn: '1/-1'
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "備考"), /*#__PURE__*/React.createElement("textarea", {
+    className: "form-textarea",
+    value: f.notes || '',
+    onChange: e => setF(p => ({
+      ...p,
+      notes: e.target.value
+    })),
+    placeholder: "自由記入",
+    style: {
+      minHeight: 48
+    }
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      border: '1px solid var(--border)',
+      borderRadius: 10,
+      padding: '12px 16px',
+      marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      fontWeight: 600,
+      color: 'var(--text2)',
+      marginBottom: 10
+    }
+  }, "利用状態"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 16,
+      flexWrap: 'wrap'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 200,
+      background: 'rgba(239,68,68,.05)',
+      border: '1px solid rgba(239,68,68,.2)',
+      borderRadius: 8,
+      padding: '10px 14px'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      marginBottom: f.hospitalized ? 10 : 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      cursor: 'pointer',
+      userSelect: 'none'
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: !!f.hospitalized,
+    onChange: e => setF(p => ({
+      ...p,
+      hospitalized: e.target.checked,
+      hospitalizedSince: e.target.checked ? p.hospitalizedSince || today() : p.hospitalizedSince
+    })),
+    style: {
+      width: 16,
+      height: 16,
+      accentColor: 'var(--err)'
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 600,
+      color: f.hospitalized ? 'var(--err)' : 'var(--text2)',
+      fontSize: 13
+    }
+  }, "🏥 入院中"))), f.hospitalized && /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "入院日"), /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    className: "form-input",
+    style: {
+      maxWidth: 180
+    },
+    value: f.hospitalizedSince || '',
+    onChange: e => setF(p => ({
+      ...p,
+      hospitalizedSince: e.target.value
+    }))
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "退院日（決まったら入力）"), /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    className: "form-input",
+    style: {
+      maxWidth: 180
+    },
+    value: f.dischargedDate || '',
+    onChange: e => setF(p => ({
+      ...p,
+      dischargedDate: e.target.value
+    }))
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text3)',
+      marginTop: 4
+    }
+  }, "退院日を入力するまで、利用予定日ごとに連絡ノートへ自動でお休みの記録が積み増されます。")))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 200,
+      background: f.longAbsence ? 'rgba(124,58,237,.06)' : 'rgba(124,58,237,.03)',
+      border: `1px solid ${f.longAbsence ? 'rgba(124,58,237,.35)' : 'rgba(124,58,237,.15)'}`,
+      borderRadius: 8,
+      padding: '10px 14px'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      marginBottom: f.longAbsence ? 10 : 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      cursor: 'pointer',
+      userSelect: 'none'
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: !!f.longAbsence,
+    onChange: e => setF(p => ({
+      ...p,
+      longAbsence: e.target.checked,
+      longAbsenceSince: e.target.checked ? p.longAbsenceSince || today() : p.longAbsenceSince
+    })),
+    style: {
+      width: 16,
+      height: 16,
+      accentColor: '#7c3aed'
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 600,
+      color: f.longAbsence ? '#7c3aed' : 'var(--text2)',
+      fontSize: 13
+    }
+  }, "🌙 長期休み（その他理由）"))), f.longAbsence && /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "開始日"), /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    className: "form-input",
+    style: {
+      maxWidth: 180
+    },
+    value: f.longAbsenceSince || '',
+    onChange: e => setF(p => ({
+      ...p,
+      longAbsenceSince: e.target.value
+    }))
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "理由"), /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    className: "form-input",
+    placeholder: "例: 骨折のため自宅療養中",
+    value: f.longAbsenceReason || '',
+    onChange: e => setF(p => ({
+      ...p,
+      longAbsenceReason: e.target.value
+    }))
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "終了日（決まったら入力）"), /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    className: "form-input",
+    style: {
+      maxWidth: 180
+    },
+    value: f.longAbsenceEndDate || '',
+    onChange: e => setF(p => ({
+      ...p,
+      longAbsenceEndDate: e.target.value
+    }))
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text3)',
+      marginTop: 4
+    }
+  }, "終了日を入力するまで、利用予定日ごとに連絡ノートへ理由を添えて自動でお休みの記録が積み増されます。")))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 200,
+      background: f.discontinued ? 'rgba(107,114,128,.08)' : 'rgba(107,114,128,.04)',
+      border: `1px solid ${f.discontinued ? 'rgba(107,114,128,.4)' : 'rgba(107,114,128,.2)'}`,
+      borderRadius: 8,
+      padding: '10px 14px'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      marginBottom: f.discontinued ? 10 : 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      cursor: 'pointer',
+      userSelect: 'none'
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: !!f.discontinued,
+    onChange: e => setF(p => ({
+      ...p,
+      discontinued: e.target.checked,
+      discontinuedSince: e.target.checked ? p.discontinuedSince || today() : p.discontinuedSince
+    })),
+    style: {
+      width: 16,
+      height: 16,
+      accentColor: '#6b7280'
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 600,
+      color: f.discontinued ? '#6b7280' : 'var(--text2)',
+      fontSize: 13
+    }
+  }, "🚫 利用中止"))), f.discontinued && /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "中止日"), /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    className: "form-input",
+    style: {
+      maxWidth: 180
+    },
+    value: f.discontinuedSince || '',
+    onChange: e => setF(p => ({
+      ...p,
+      discontinuedSince: e.target.value
+    }))
+  })))), (f.hospitalized || f.longAbsence || f.discontinued) && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8,
+      fontSize: 11,
+      color: 'var(--text3)'
+    }
+  }, f.discontinued ? '利用中止中は曜日マスタへの表示・当日入力から除外されます（この期間にカルテがあると矛盾チェックで警告されます）' : '入院中・長期休みはマスタや矛盾チェックから除外されます')), /*#__PURE__*/React.createElement("div", {
+    style: {
+      border: '1px solid var(--border)',
+      borderRadius: 10,
+      padding: '12px 16px',
+      marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      fontWeight: 600,
+      color: 'var(--text2)',
+      marginBottom: 10
+    }
+  }, "利用曜日・サービス内容", /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 400,
+      color: 'var(--text3)',
+      marginLeft: 6
+    }
+  }, "（保存すると各曜日マスタに自動反映されます）")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap',
+      marginBottom: 12
+    }
+  }, DAYS.map(d => /*#__PURE__*/React.createElement("span", {
+    key: d,
+    onClick: () => toggleUseDay(d),
+    className: `day-tag ${svc.useDays.includes(d) ? 'day-active' : 'day-inactive'}`,
+    style: {
+      width: 36,
+      height: 36,
+      fontSize: 13,
+      cursor: 'pointer'
+    }
+  }, d, "曜日"))), svc.useDays.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 16,
+      flexWrap: 'wrap',
+      alignItems: 'flex-end'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "入浴"), /*#__PURE__*/React.createElement("select", {
+    className: "form-select",
+    style: {
+      width: 90
+    },
+    value: svc.bath ? '○' : '×',
+    onChange: e => setSvc(p => ({...p, bath: e.target.value === '○'}))
+  }, /*#__PURE__*/React.createElement("option", {value: "×"}, "×"), /*#__PURE__*/React.createElement("option", {value: "○"}, "○"))), svc.bath && /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "入浴方法"), /*#__PURE__*/React.createElement("select", {
+    className: "form-select",
+    style: {
+      width: 140
+    },
+    value: svc.bathMethod,
+    onChange: e => setSvc(p => ({...p, bathMethod: e.target.value}))
+  }, /*#__PURE__*/React.createElement("option", {value: ""}, "選択"), BATH_METHODS.map(m => /*#__PURE__*/React.createElement("option", {
+    key: m,
+    value: m
+  }, m)))), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "排泄援助"), /*#__PURE__*/React.createElement("select", {
+    className: "form-select",
+    style: {
+      width: 90
+    },
+    value: svc.toiletAssist ? '○' : '×',
+    onChange: e => setSvc(p => ({...p, toiletAssist: e.target.value === '○'}))
+  }, /*#__PURE__*/React.createElement("option", {value: "×"}, "×"), /*#__PURE__*/React.createElement("option", {value: "○"}, "○"))), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 0,
+      flex: 1,
+      minWidth: 200
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "リハビリ区分"), /*#__PURE__*/React.createElement("select", {
+    className: "form-select",
+    value: svc.rehabCategory,
+    onChange: e => setSvc(p => ({...p, rehabCategory: e.target.value}))
+  }, /*#__PURE__*/React.createElement("option", {value: ""}, "選択してください"), REHAB_CATS.map(c => /*#__PURE__*/React.createElement("option", {
+    key: c,
+    value: c
+  }, c))))), svc.useDays.length === 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text3)'
+    }
+  }, "曜日を選択すると、入浴・リハビリ区分などを設定できます。")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      border: '1px solid var(--border)',
+      borderRadius: 10,
+      padding: '12px 16px',
+      marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 600,
+      fontSize: 13,
+      color: 'var(--text)'
+    }
+  }, "📅 利用曜日変更履歴"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost btn-sm",
+    onClick: () => setShowHistForm(v => !v)
+  }, "＋ 記録追加")), showHistForm && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: 'var(--bg2)',
+      borderRadius: 8,
+      padding: '10px 12px',
+      marginBottom: 10,
+      border: '1px solid var(--border)'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid-2",
+    style: {
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "変更日"), /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    className: "form-input",
+    value: newHist.date,
+    onChange: e => setNewHist(p => ({
+      ...p,
+      date: e.target.value
+    }))
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 0
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "変更後の利用曜日"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 4,
+      flexWrap: 'wrap',
+      marginTop: 2
+    }
+  }, DAYS.map(d => /*#__PURE__*/React.createElement("span", {
+    key: d,
+    onClick: () => toggleDay(d),
+    className: `day-tag ${newHist.days.includes(d) ? 'day-active' : 'day-inactive'}`,
+    style: {
+      width: 30,
+      height: 30,
+      fontSize: 12,
+      cursor: 'pointer'
+    }
+  }, d)))), /*#__PURE__*/React.createElement("div", {
+    className: "form-group",
+    style: {
+      marginBottom: 0,
+      gridColumn: '1/-1'
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "form-label"
+  }, "メモ（理由・補足）"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    value: newHist.memo,
+    onChange: e => setNewHist(p => ({
+      ...p,
+      memo: e.target.value
+    })),
+    placeholder: "例：月曜→金曜に変更"
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      justifyContent: 'flex-end'
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost btn-sm",
+    onClick: () => setShowHistForm(false)
+  }, "キャンセル"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-gold btn-sm",
+    onClick: addHistory
+  }, "追加"))), (f.dayHistory || []).length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text3)',
+      textAlign: 'center',
+      padding: '8px 0'
+    }
+  }, "変更履歴なし") : /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 6
+    }
+  }, [...(f.dayHistory || [])].reverse().map(h => /*#__PURE__*/React.createElement("div", {
+    key: h.id,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      padding: '6px 10px',
+      background: 'var(--bg2)',
+      borderRadius: 8,
+      border: '1px solid var(--border)'
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      fontWeight: 600,
+      color: 'var(--gold-d)',
+      whiteSpace: 'nowrap'
+    }
+  }, fmtDate(h.date)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 3
+    }
+  }, h.days.length > 0 ? h.days.map(d => /*#__PURE__*/React.createElement("span", {
+    key: d,
+    className: "day-tag day-active",
+    style: {
+      width: 22,
+      height: 22,
+      fontSize: 10
+    }
+  }, d)) : /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text3)'
+    }
+  }, "曜日未設定")), h.memo && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text2)',
+      flex: 1
+    }
+  }, h.memo), /*#__PURE__*/React.createElement("button", {
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--err)',
+      cursor: 'pointer',
+      fontSize: 14,
+      lineHeight: 1
+    },
+    onClick: () => delHistory(h.id)
+  }, "✕"))))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      justifyContent: 'flex-end',
+      marginTop: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost",
+    onClick: onClose
+  }, "キャンセル"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-gold",
+    onClick: save
+  }, "保存")));
+}
+
+function UserListTab({
+  data,
+  setData
+}) {
+  const [showForm, setShowForm] = useState(false);
+  const [editUser, setEditUser] = useState(null);
+  const [showBulk, setShowBulk] = useState(false);
+  const deleteUser = id => {
+    const name = data.users.find(u => u.id === id)?.name;
+    if (!name) return;
+    if (!window.confirm(`${name} さんを削除しますか？関連する当日入力・マスタ・時間割も同時に削除されます。`)) return;
+    setData(p => {
+      // dayMasters から削除
+      const dm = {
+        ...p.dayMasters
+      };
+      DAYS.forEach(d => {
+        dm[d] = (dm[d] || []).filter(x => x.userName !== name);
+      });
+      // rehabSchedule から削除
+      const rs = {};
+      DAYS.forEach(d => {
+        rs[d] = (p.rehabSchedule[d] || []).map(slot => ({
+          ...slot,
+          users: (slot.users || []).filter(u => u !== name)
+        }));
+      });
+      // dailyAttendance から削除
+      const da = p.dailyAttendance.map(att => ({
+        ...att,
+        entries: att.entries.filter(e => e.userName !== name)
+      }));
+      return {
+        ...p,
+        users: p.users.filter(u => u.id !== id),
+        dayMasters: dm,
+        rehabSchedule: rs,
+        dailyAttendance: da
+      };
+    });
+  };
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "sec-hdr"
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text2)'
+    }
+  }, data.users.length, "名登録済み\u3000―\u3000各曜日マスタで入浴・リハビリ区分を設定してください"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost",
+    onClick: () => setShowBulk(true)
+  }, "📋 一括インポート"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-gold",
+    onClick: () => {
+      setEditUser(null);
+      setShowForm(true);
+    }
+  }, "＋ 利用者登録"))), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "table-wrap"
+  }, /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "利用者名"), /*#__PURE__*/React.createElement("th", null, "フリガナ"), /*#__PURE__*/React.createElement("th", null, "状態"), /*#__PURE__*/React.createElement("th", null, "登録曜日"), /*#__PURE__*/React.createElement("th", null, "備考"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, data.users.length === 0 && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+    colSpan: 6
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "empty"
+  }, "利用者を登録してください"))), sortByKana(data.users).map(u => {
+    const regDays = DAYS.filter(d => (data.dayMasters[d] || []).some(dm => dm.userName === u.name));
+    return /*#__PURE__*/React.createElement("tr", {
+      key: u.id,
+      style: {
+        opacity: isHospitalizedNow(u) || isLongAbsenceNow(u) || u.discontinued ? 0.65 : 1
+      }
+    }, /*#__PURE__*/React.createElement("td", {
+      style: {
+        fontWeight: 500
+      }
+    }, u.name), /*#__PURE__*/React.createElement("td", {
+      style: {
+        fontSize: 12,
+        color: 'var(--text2)'
+      }
+    }, /*#__PURE__*/React.createElement(KanaCell, {user: u, setData: setData})), /*#__PURE__*/React.createElement("td", null, u.discontinued ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-block',
+        padding: '2px 8px',
+        borderRadius: 20,
+        fontSize: 11,
+        fontWeight: 700,
+        background: 'rgba(107,114,128,.12)',
+        color: '#6b7280',
+        border: '1px solid rgba(107,114,128,.3)',
+        whiteSpace: 'nowrap'
+      }
+    }, "🚫 利用中止", u.discontinuedSince ? `（${fmtDate(u.discontinuedSince)}〜）` : '') : isHospitalizedNow(u) ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-block',
+        padding: '2px 8px',
+        borderRadius: 20,
+        fontSize: 11,
+        fontWeight: 700,
+        background: 'rgba(239,68,68,.12)',
+        color: 'var(--err)',
+        border: '1px solid rgba(239,68,68,.3)',
+        whiteSpace: 'nowrap'
+      }
+    }, "🏥 入院中", u.hospitalizedSince ? `（${fmtDate(u.hospitalizedSince)}〜）` : '') : isLongAbsenceNow(u) ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-block',
+        padding: '2px 8px',
+        borderRadius: 20,
+        fontSize: 11,
+        fontWeight: 700,
+        background: 'rgba(124,58,237,.12)',
+        color: '#7c3aed',
+        border: '1px solid rgba(124,58,237,.3)',
+        whiteSpace: 'nowrap'
+      }
+    }, "🌙 長期休み", u.longAbsenceSince ? `（${fmtDate(u.longAbsenceSince)}〜）` : '', u.longAbsenceReason ? ` ${u.longAbsenceReason}` : '') : /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-block',
+        padding: '2px 8px',
+        borderRadius: 20,
+        fontSize: 11,
+        fontWeight: 700,
+        background: 'rgba(22,163,74,.10)',
+        color: 'var(--ok)',
+        border: '1px solid rgba(22,163,74,.25)',
+        whiteSpace: 'nowrap'
+      }
+    }, "✅ 通所中")), /*#__PURE__*/React.createElement("td", null, DAYS.map(d => /*#__PURE__*/React.createElement("span", {
+      key: d,
+      className: `day-tag ${regDays.includes(d) ? 'day-active' : 'day-inactive'}`,
+      style: {
+        width: 26,
+        height: 26,
+        fontSize: 11
+      }
+    }, d))), /*#__PURE__*/React.createElement("td", {
+      style: {
+        fontSize: 12,
+        color: 'var(--text2)',
+        maxWidth: 180
+      }
+    }, u.notes || '-'), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 4
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      className: "btn btn-ghost btn-sm",
+      onClick: () => {
+        setEditUser(u);
+        setShowForm(true);
+      }
+    }, "編集"), /*#__PURE__*/React.createElement("button", {
+      className: "btn btn-danger btn-sm",
+      onClick: () => deleteUser(u.id)
+    }, "削除"))));
+  }))))), showForm && /*#__PURE__*/React.createElement(UserForm, {
+    data: data,
+    setData: setData,
+    init: editUser,
+    onClose: () => {
+      setShowForm(false);
+      setEditUser(null);
+    }
+  }), showBulk && /*#__PURE__*/React.createElement(BulkImportModal, {
+    data: data,
+    setData: setData,
+    onClose: () => setShowBulk(false)
+  }));
+}
+
+
+/* ── 曜日マスタ タブ ── */
+function DayMasterTab({
+  data,
+  setData,
+  day
+}) {
+  const entries = data.dayMasters[day] || [];
+  const registered = new Set(entries.map(e => e.userName));
+  // 利用中止・入院中ユーザーは追加候補から除外
+  const unassigned = sortByKana(data.users.filter(u => !registered.has(u.name) && !u.discontinued && !isHospitalizedNow(u) && !isLongAbsenceNow(u)));
+  // 利用中止ユーザーはマスタ表から非表示（データは保持）
+  const userMap = Object.fromEntries(data.users.map(u => [u.name, u]));
+  // [entry, realIndex] のペアで保持し、表示番号と実インデックスを分離
+  const visibleEntries = entries.map((e, i) => [e, i]).filter(([e]) => !userMap[e.userName]?.discontinued).sort(([a], [b]) => kanaFor(a.userName).localeCompare(kanaFor(b.userName), 'ja'));
+  const [showPanel, setShowPanel] = useState(false);
+  const [selected, setSelected] = useState(new Set());
+  const toggleUser = name => setSelected(prev => {
+    const next = new Set(prev);
+    next.has(name) ? next.delete(name) : next.add(name);
+    return next;
+  });
+  const selectAll = () => setSelected(new Set(unassigned.map(u => u.name)));
+  const selectNone = () => setSelected(new Set());
+  const addSelected = () => {
+    if (!selected.size) return;
+    const names = [...selected];
+    setData(p => {
+      const dm = {
+        ...p.dayMasters
+      };
+      const cur = dm[day] || [];
+      dm[day] = [...cur, ...names.filter(n => !cur.some(e => e.userName === n)).map(n => ({
+        userName: n,
+        bath: false,
+        bathMethod: '',
+        toiletAssist: false,
+        rehabCategory: '',
+        scheduleWeeks: [1, 2, 3, 4, 5]
+      }))];
+      return {
+        ...p,
+        dayMasters: dm
+      };
+    });
+    showToast(`${names.length}名を${DAY_NAMES[day]}マスタに追加しました`, 'ok');
+    setSelected(new Set());
+    setShowPanel(false);
+  };
+  const updateEntry = (idx, field, value) => setData(p => {
+    const dm = {
+      ...p.dayMasters
+    };
+    const rows = [...(dm[day] || [])];
+    rows[idx] = {
+      ...rows[idx],
+      [field]: value
+    };
+    dm[day] = rows;
+    return {
+      ...p,
+      dayMasters: dm
+    };
+  });
+  const removeEntry = idx => setData(p => {
+    const dm = {
+      ...p.dayMasters
+    };
+    dm[day] = (dm[day] || []).filter((_, i) => i !== idx);
+    return {
+      ...p,
+      dayMasters: dm
+    };
+  });
+  const [schedEdit, setSchedEdit] = useState(null);
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: 'var(--text2)'
+    }
+  }, DAY_NAMES[day], "登録利用者：", /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--gold)',
+      fontWeight: 600
+    }
+  }, visibleEntries.length, "名"), entries.length > visibleEntries.length && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: 'var(--text3)',
+      marginLeft: 6
+    }
+  }, "（利用中止 ", entries.length - visibleEntries.length, "名を非表示）")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }), unassigned.length > 0 && /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-gold btn-sm",
+    onClick: () => {
+      setShowPanel(v => !v);
+      setSelected(new Set());
+    }
+  }, "＋ 利用者を追加 ", /*#__PURE__*/React.createElement("span", {
+    style: {
+      opacity: .8,
+      fontWeight: 400
+    }
+  }, "（", unassigned.length, "名）"))), showPanel && /*#__PURE__*/React.createElement("div", {
+    className: "ms-panel"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      flexWrap: 'wrap',
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      color: 'var(--gold-d)',
+      marginRight: 4
+    }
+  }, "追加する利用者を選択"), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text2)',
+      background: 'rgba(201,168,76,.12)',
+      padding: '1px 8px',
+      borderRadius: 20
+    }
+  }, selected.size, "名選択中"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost btn-sm",
+    onClick: selectAll
+  }, "全選択"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost btn-sm",
+    onClick: selectNone
+  }, "解除"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-gold btn-sm",
+    onClick: addSelected,
+    disabled: !selected.size
+  }, "✓ 一括追加"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost btn-sm",
+    onClick: () => setShowPanel(false)
+  }, "✕")), /*#__PURE__*/React.createElement("div", {
+    className: "ms-grid"
+  }, unassigned.map(u => /*#__PURE__*/React.createElement("div", {
+    key: u.id,
+    className: `ms-item${selected.has(u.name) ? ' sel' : ''}`,
+    onClick: () => toggleUser(u.name)
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: selected.has(u.name),
+    readOnly: true
+  }), u.name)))), data.users.length === 0 && /*#__PURE__*/React.createElement("div", {
+    className: "alert alert-info"
+  }, /*#__PURE__*/React.createElement("span", null, "ℹ️"), /*#__PURE__*/React.createElement("span", null, "先に「利用者リスト」タブで利用者を登録してください。")), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", {
+    style: {
+      width: 36
+    }
+  }, "No."), /*#__PURE__*/React.createElement("th", null, "利用者名"), /*#__PURE__*/React.createElement("th", {
+    style: {
+      width: 130
+    }
+  }, "利用頻度"), /*#__PURE__*/React.createElement("th", {
+    style: {
+      width: 90
+    }
+  }, "入浴有無"), /*#__PURE__*/React.createElement("th", {
+    style: {
+      width: 150
+    }
+  }, "入浴方法"), /*#__PURE__*/React.createElement("th", {
+    style: {
+      width: 90
+    }
+  }, "排泄援助"), /*#__PURE__*/React.createElement("th", null, "リハビリ区分"), /*#__PURE__*/React.createElement("th", {
+    style: {
+      width: 60
+    }
+  }))), /*#__PURE__*/React.createElement("tbody", null, visibleEntries.length === 0 && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+    colSpan: 8
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "empty"
+  }, "利用者を追加してください"))), visibleEntries.map(([e, realIdx], displayIdx) => /*#__PURE__*/React.createElement("tr", {
+    key: realIdx
+  }, /*#__PURE__*/React.createElement("td", {
+    style: {
+      color: 'var(--text2)'
+    }
+  }, displayIdx + 1), /*#__PURE__*/React.createElement("td", {
+    style: {
+      fontWeight: 500
+    }
+  }, e.userName), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost btn-sm",
+    onClick: () => setSchedEdit(realIdx),
+    style: {
+      fontSize: 11,
+      whiteSpace: 'nowrap'
+    }
+  }, fmtSchedule(e.scheduleWeeks), " ✏️")), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("select", {
+    className: "form-select",
+    style: {
+      padding: '4px 8px',
+      fontSize: 12
+    },
+    value: e.bath ? '○' : '×',
+    onChange: v => updateEntry(realIdx, 'bath', v.target.value === '○')
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "○"
+  }, "○"), /*#__PURE__*/React.createElement("option", {
+    value: "×"
+  }, "×"))), /*#__PURE__*/React.createElement("td", null, e.bath ? /*#__PURE__*/React.createElement("select", {
+    className: "form-select",
+    style: {
+      padding: '4px 8px',
+      fontSize: 12
+    },
+    value: e.bathMethod,
+    onChange: v => updateEntry(realIdx, 'bathMethod', v.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "選択"), BATH_METHODS.map(m => /*#__PURE__*/React.createElement("option", {
+    key: m,
+    value: m
+  }, m))) : /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--text3)',
+      fontSize: 12
+    }
+  }, "—")), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("select", {
+    className: "form-select",
+    style: {
+      padding: '4px 8px',
+      fontSize: 12
+    },
+    value: e.toiletAssist ? '○' : '×',
+    onChange: v => updateEntry(realIdx, 'toiletAssist', v.target.value === '○')
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "○"
+  }, "○"), /*#__PURE__*/React.createElement("option", {
+    value: "×"
+  }, "×"))), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("select", {
+    className: "form-select",
+    style: {
+      padding: '4px 8px',
+      fontSize: 12
+    },
+    value: e.rehabCategory,
+    onChange: v => updateEntry(realIdx, 'rehabCategory', v.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "選択してください"), REHAB_CATS.map(c => /*#__PURE__*/React.createElement("option", {
+    key: c,
+    value: c
+  }, c)))), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-danger btn-sm",
+    onClick: () => removeEntry(realIdx)
+  }, "削除"))))))), schedEdit !== null && /*#__PURE__*/React.createElement(ScheduleCalendarModal, {
+    day: day,
+    scheduleWeeks: entries[schedEdit]?.scheduleWeeks || [1, 2, 3, 4, 5],
+    onSave: weeks => {
+      updateEntry(schedEdit, 'scheduleWeeks', weeks);
+      setSchedEdit(null);
+    },
+    onClose: () => setSchedEdit(null)
+  }));
+}
+
+
+/* ── スタッフ タブ ── */
+function StaffTab({
+  data,
+  setData
+}) {
+  const [sName, setSName] = useState('');
+  const add = () => {
+    if (!sName.trim()) return;
+    setData(p => ({
+      ...p,
+      staff: [...p.staff, {
+        id: uid(),
+        name: sName.trim()
+      }]
+    }));
+    setSName('');
+  };
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    value: sName,
+    onChange: e => setSName(e.target.value),
+    placeholder: "スタッフ名を入力してEnter",
+    onKeyDown: e => e.key === 'Enter' && add()
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-gold",
+    onClick: add,
+    style: {
+      whiteSpace: 'nowrap'
+    }
+  }, "＋ 追加"))), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, data.staff.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "empty"
+  }, "スタッフが登録されていません") : /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 8
+    }
+  }, data.staff.map(s => /*#__PURE__*/React.createElement("div", {
+    key: s.id,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      padding: '6px 12px',
+      background: 'var(--bg2)',
+      borderRadius: 8,
+      border: '1px solid var(--border)'
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 13
+    }
+  }, s.name), /*#__PURE__*/React.createElement("button", {
+    style: {
+      background: 'none',
+      border: 'none',
+      color: 'var(--err)',
+      cursor: 'pointer',
+      fontSize: 13
+    },
+    onClick: () => setData(p => ({
+      ...p,
+      staff: p.staff.filter(x => x.id !== s.id)
+    }))
+  }, "✕"))))));
+}
+
 function UserManagement({
   data,
   setData
 }) {
   const [tab, setTab] = useState('list');
-
-  /* ── 利用者リスト タブ ── */
-  function UserListTab() {
-    const [showForm, setShowForm] = useState(false);
-    const [editUser, setEditUser] = useState(null);
-    const [showBulk, setShowBulk] = useState(false);
-    function BulkImportModal({
-      onClose
-    }) {
-      const [text, setText] = useState('');
-      const parsed = text.split(/\r?\n/).map(row => row.split('\t')[0].trim()).filter(s => s.length > 0);
-      const existingNames = new Set(data.users.map(u => u.name));
-      const newNames = [...new Set(parsed)].filter(n => !existingNames.has(n));
-      const dupNames = [...new Set(parsed)].filter(n => existingNames.has(n));
-      const doImport = () => {
-        if (!newNames.length) return;
-        setData(p => ({
-          ...p,
-          users: [...p.users, ...newNames.map(n => ({
-            id: uid(),
-            name: n,
-            kana: '',
-            notes: ''
-          }))]
-        }));
-        showToast(`${newNames.length}名を登録しました`, 'ok');
-        onClose();
-      };
-      return /*#__PURE__*/React.createElement(Modal, {
-        title: "利用者 一括インポート",
-        onClose: onClose,
-        wide: true
-      }, /*#__PURE__*/React.createElement("div", {
-        className: "form-group"
-      }, /*#__PURE__*/React.createElement("label", {
-        className: "form-label"
-      }, "名前を貼り付け（Excelからコピー可）"), /*#__PURE__*/React.createElement("textarea", {
-        className: "form-textarea",
-        style: {
-          minHeight: 160,
-          fontFamily: 'monospace',
-          fontSize: 13
-        },
-        placeholder: "山田 太郎\n鈴木 花子\n田中 一郎\n\n※ Excelのセルをそのままコピペできます（複数列の場合は1列目の名前のみ取得）",
-        value: text,
-        onChange: e => setText(e.target.value),
-        autoFocus: true
-      })), parsed.length > 0 && /*#__PURE__*/React.createElement("div", {
-        style: {
-          marginBottom: 14
-        }
-      }, newNames.length > 0 && /*#__PURE__*/React.createElement("div", {
-        style: {
-          background: 'rgba(22,163,74,.07)',
-          border: '1px solid rgba(22,163,74,.25)',
-          borderRadius: 8,
-          padding: '10px 14px',
-          marginBottom: 8
-        }
-      }, /*#__PURE__*/React.createElement("div", {
-        style: {
-          fontWeight: 700,
-          color: 'var(--ok)',
-          marginBottom: 6,
-          fontSize: 12
-        }
-      }, "✅ 新規追加 ", newNames.length, "名"), /*#__PURE__*/React.createElement("div", {
-        style: {
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 6
-        }
-      }, newNames.map((n, i) => /*#__PURE__*/React.createElement("span", {
-        key: i,
-        style: {
-          background: 'rgba(22,163,74,.15)',
-          color: 'var(--ok)',
-          borderRadius: 20,
-          padding: '2px 10px',
-          fontSize: 12,
-          fontWeight: 600
-        }
-      }, n)))), dupNames.length > 0 && /*#__PURE__*/React.createElement("div", {
-        style: {
-          background: 'rgba(217,119,6,.07)',
-          border: '1px solid rgba(217,119,6,.25)',
-          borderRadius: 8,
-          padding: '10px 14px'
-        }
-      }, /*#__PURE__*/React.createElement("div", {
-        style: {
-          fontWeight: 700,
-          color: 'var(--warn)',
-          marginBottom: 6,
-          fontSize: 12
-        }
-      }, "⚠️ 既に登録済み（スキップ） ", dupNames.length, "名"), /*#__PURE__*/React.createElement("div", {
-        style: {
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 6
-        }
-      }, dupNames.map((n, i) => /*#__PURE__*/React.createElement("span", {
-        key: i,
-        style: {
-          background: 'rgba(217,119,6,.12)',
-          color: 'var(--warn)',
-          borderRadius: 20,
-          padding: '2px 10px',
-          fontSize: 12,
-          fontWeight: 600
-        }
-      }, n))))), /*#__PURE__*/React.createElement("div", {
-        style: {
-          display: 'flex',
-          gap: 8,
-          justifyContent: 'flex-end',
-          marginTop: 6
-        }
-      }, /*#__PURE__*/React.createElement("button", {
-        className: "btn btn-ghost",
-        onClick: onClose
-      }, "キャンセル"), /*#__PURE__*/React.createElement("button", {
-        className: "btn btn-gold",
-        onClick: doImport,
-        disabled: newNames.length === 0
-      }, "📋 ", newNames.length, "名を一括登録")));
-    }
-    function UserForm({
-      init,
-      onClose
-    }) {
-      const kanaAccumRef = useRef(init?.kana || '');
-      const compKanaRef = useRef('');
-      const [f, setF] = useState(init || {
-        name: '',
-        kana: '',
-        notes: '',
-        hospitalized: false,
-        hospitalizedSince: '',
-        dischargedDate: '',
-        longAbsence: false,
-        longAbsenceSince: '',
-        longAbsenceEndDate: '',
-        longAbsenceReason: '',
-        discontinued: false,
-        discontinuedSince: '',
-        dayHistory: []
-      });
-      const [newHist, setNewHist] = useState({
-        date: today(),
-        days: [],
-        memo: ''
-      });
-      const [showHistForm, setShowHistForm] = useState(false);
-      const toggleDay = d => setNewHist(p => ({
-        ...p,
-        days: p.days.includes(d) ? p.days.filter(x => x !== d) : [...p.days, d]
-      }));
-
-      // 利用曜日・サービス内容（保存時に各曜日マスタへ自動反映する）
-      const [svc, setSvc] = useState(() => {
-        if (!init) return {
-          useDays: [],
-          bath: false,
-          bathMethod: '',
-          toiletAssist: false,
-          rehabCategory: '',
-          scheduleWeeks: [1, 2, 3, 4, 5]
-        };
-        const useDays = DAYS.filter(d => (data.dayMasters[d] || []).some(e => e.userName === init.name));
-        let rep = null;
-        for (const d of useDays) {
-          rep = (data.dayMasters[d] || []).find(e => e.userName === init.name);
-          if (rep) break;
-        }
-        return {
-          useDays,
-          bath: rep?.bath || false,
-          bathMethod: rep?.bathMethod || '',
-          toiletAssist: rep?.toiletAssist || false,
-          rehabCategory: rep?.rehabCategory || '',
-          scheduleWeeks: rep?.scheduleWeeks || [1, 2, 3, 4, 5]
-        };
-      });
-      const toggleUseDay = d => setSvc(p => ({
-        ...p,
-        useDays: p.useDays.includes(d) ? p.useDays.filter(x => x !== d) : [...p.useDays, d]
-      }));
-      const addHistory = () => {
-        if (!newHist.date) return;
-        const entry = {
-          id: uid(),
-          ...newHist
-        };
-        setF(p => ({
-          ...p,
-          dayHistory: [...(p.dayHistory || []), entry].sort((a, b) => a.date.localeCompare(b.date))
-        }));
-        setNewHist({
-          date: today(),
-          days: [],
-          memo: ''
-        });
-        setShowHistForm(false);
-      };
-      const delHistory = id => setF(p => ({
-        ...p,
-        dayHistory: (p.dayHistory || []).filter(h => h.id !== id)
-      }));
-      const save = () => {
-        if (!f.name.trim()) return;
-        const userName = f.name.trim();
-        const oldName = init?.name; // 改名時、旧名で登録済みの曜日マスタを追跡するため
-        // 入院中の連絡ノートは、保存後にApp側のuseEffectが利用予定日ごとに
-        // 自動で積み増す（ここでは何もしない。退院日が入るまで日付が経つほど増える）
-        if (init) {
-          setData(p => ({
-            ...p,
-            users: p.users.map(u => u.id === init.id ? {
-              ...u,
-              ...f,
-              name: userName
-            } : u)
-          }));
-        } else {
-          setData(p => ({
-            ...p,
-            users: [...p.users, {
-              id: uid(),
-              ...f,
-              name: userName
-            }]
-          }));
-        }
-        // 利用曜日・サービス内容を各曜日マスタへ自動反映（選択した曜日は追加/更新、外した曜日は削除）
-        setData(p => {
-          const dm = {
-            ...p.dayMasters
-          };
-          DAYS.forEach(d => {
-            const cur = dm[d] || [];
-            const matchName = oldName || userName;
-            const idx = cur.findIndex(e => e.userName === matchName);
-            if (svc.useDays.includes(d)) {
-              const merged = {
-                ...(idx >= 0 ? cur[idx] : {}),
-                userName,
-                bath: svc.bath,
-                bathMethod: svc.bath ? svc.bathMethod : '',
-                toiletAssist: svc.toiletAssist,
-                rehabCategory: svc.rehabCategory,
-                scheduleWeeks: svc.scheduleWeeks
-              };
-              dm[d] = idx >= 0 ? cur.map((e, i) => i === idx ? merged : e) : [...cur, merged];
-            } else if (idx >= 0) {
-              dm[d] = cur.filter((_, i) => i !== idx);
-            }
-          });
-          return {
-            ...p,
-            dayMasters: dm
-          };
-        });
-        onClose();
-      };
-      return /*#__PURE__*/React.createElement(Modal, {
-        title: init ? '利用者編集' : '利用者登録',
-        onClose: onClose,
-        wide: true
-      }, /*#__PURE__*/React.createElement("div", {
-        className: "grid-2"
-      }, /*#__PURE__*/React.createElement("div", {
-        className: "form-group",
-        style: {
-          gridColumn: '1/-1'
-        }
-      }, /*#__PURE__*/React.createElement("label", {
-        className: "form-label"
-      }, "利用者名 *"), /*#__PURE__*/React.createElement("input", {
-        className: "form-input",
-        value: f.name,
-        onChange: e => {
-          const v = e.target.value;
-          if (!v) kanaAccumRef.current = '';
-          setF(p => ({...p, name: v, kana: kanaAccumRef.current}));
-        },
-        onCompositionUpdate: e => { compKanaRef.current = e.data; },
-        onCompositionEnd: () => {
-          kanaAccumRef.current += compKanaRef.current;
-          compKanaRef.current = '';
-          setF(p => ({...p, kana: kanaAccumRef.current}));
-        },
-        placeholder: "氏名（日本語入力で変換するとふりがな自動設定）"
-      })), /*#__PURE__*/React.createElement("div", {
-        className: "form-group",
-        style: {
-          gridColumn: '1/-1'
-        }
-      }, /*#__PURE__*/React.createElement("label", {
-        className: "form-label"
-      }, "ふりがな"), /*#__PURE__*/React.createElement("input", {
-        className: "form-input",
-        value: f.kana || '',
-        onChange: e => setF(p => ({...p, kana: e.target.value, kanaManual: true})),
-        placeholder: "五十音順の並びに使われます（読みが違う場合はここで修正）"
-      })), /*#__PURE__*/React.createElement("div", {
-        className: "form-group",
-        style: {
-          gridColumn: '1/-1'
-        }
-      }, /*#__PURE__*/React.createElement("label", {
-        className: "form-label"
-      }, "備考"), /*#__PURE__*/React.createElement("textarea", {
-        className: "form-textarea",
-        value: f.notes || '',
-        onChange: e => setF(p => ({
-          ...p,
-          notes: e.target.value
-        })),
-        placeholder: "自由記入",
-        style: {
-          minHeight: 48
-        }
-      }))), /*#__PURE__*/React.createElement("div", {
-        style: {
-          border: '1px solid var(--border)',
-          borderRadius: 10,
-          padding: '12px 16px',
-          marginBottom: 14
-        }
-      }, /*#__PURE__*/React.createElement("div", {
-        style: {
-          fontSize: 12,
-          fontWeight: 600,
-          color: 'var(--text2)',
-          marginBottom: 10
-        }
-      }, "利用状態"), /*#__PURE__*/React.createElement("div", {
-        style: {
-          display: 'flex',
-          gap: 16,
-          flexWrap: 'wrap'
-        }
-      }, /*#__PURE__*/React.createElement("div", {
-        style: {
-          flex: 1,
-          minWidth: 200,
-          background: 'rgba(239,68,68,.05)',
-          border: '1px solid rgba(239,68,68,.2)',
-          borderRadius: 8,
-          padding: '10px 14px'
-        }
-      }, /*#__PURE__*/React.createElement("div", {
-        style: {
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          marginBottom: f.hospitalized ? 10 : 0
-        }
-      }, /*#__PURE__*/React.createElement("label", {
-        style: {
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          cursor: 'pointer',
-          userSelect: 'none'
-        }
-      }, /*#__PURE__*/React.createElement("input", {
-        type: "checkbox",
-        checked: !!f.hospitalized,
-        onChange: e => setF(p => ({
-          ...p,
-          hospitalized: e.target.checked,
-          hospitalizedSince: e.target.checked ? p.hospitalizedSince || today() : p.hospitalizedSince
-        })),
-        style: {
-          width: 16,
-          height: 16,
-          accentColor: 'var(--err)'
-        }
-      }), /*#__PURE__*/React.createElement("span", {
-        style: {
-          fontWeight: 600,
-          color: f.hospitalized ? 'var(--err)' : 'var(--text2)',
-          fontSize: 13
-        }
-      }, "🏥 入院中"))), f.hospitalized && /*#__PURE__*/React.createElement("div", {
-        className: "form-group",
-        style: {
-          marginBottom: 0
-        }
-      }, /*#__PURE__*/React.createElement("label", {
-        className: "form-label"
-      }, "入院日"), /*#__PURE__*/React.createElement("input", {
-        type: "date",
-        className: "form-input",
-        style: {
-          maxWidth: 180
-        },
-        value: f.hospitalizedSince || '',
-        onChange: e => setF(p => ({
-          ...p,
-          hospitalizedSince: e.target.value
-        }))
-      }), /*#__PURE__*/React.createElement("div", {
-        style: {
-          marginTop: 8
-        }
-      }, /*#__PURE__*/React.createElement("label", {
-        className: "form-label"
-      }, "退院日（決まったら入力）"), /*#__PURE__*/React.createElement("input", {
-        type: "date",
-        className: "form-input",
-        style: {
-          maxWidth: 180
-        },
-        value: f.dischargedDate || '',
-        onChange: e => setF(p => ({
-          ...p,
-          dischargedDate: e.target.value
-        }))
-      }), /*#__PURE__*/React.createElement("div", {
-        style: {
-          fontSize: 11,
-          color: 'var(--text3)',
-          marginTop: 4
-        }
-      }, "退院日を入力するまで、利用予定日ごとに連絡ノートへ自動でお休みの記録が積み増されます。")))), /*#__PURE__*/React.createElement("div", {
-        style: {
-          flex: 1,
-          minWidth: 200,
-          background: f.longAbsence ? 'rgba(124,58,237,.06)' : 'rgba(124,58,237,.03)',
-          border: `1px solid ${f.longAbsence ? 'rgba(124,58,237,.35)' : 'rgba(124,58,237,.15)'}`,
-          borderRadius: 8,
-          padding: '10px 14px'
-        }
-      }, /*#__PURE__*/React.createElement("div", {
-        style: {
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          marginBottom: f.longAbsence ? 10 : 0
-        }
-      }, /*#__PURE__*/React.createElement("label", {
-        style: {
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          cursor: 'pointer',
-          userSelect: 'none'
-        }
-      }, /*#__PURE__*/React.createElement("input", {
-        type: "checkbox",
-        checked: !!f.longAbsence,
-        onChange: e => setF(p => ({
-          ...p,
-          longAbsence: e.target.checked,
-          longAbsenceSince: e.target.checked ? p.longAbsenceSince || today() : p.longAbsenceSince
-        })),
-        style: {
-          width: 16,
-          height: 16,
-          accentColor: '#7c3aed'
-        }
-      }), /*#__PURE__*/React.createElement("span", {
-        style: {
-          fontWeight: 600,
-          color: f.longAbsence ? '#7c3aed' : 'var(--text2)',
-          fontSize: 13
-        }
-      }, "🌙 長期休み（その他理由）"))), f.longAbsence && /*#__PURE__*/React.createElement("div", {
-        className: "form-group",
-        style: {
-          marginBottom: 0
-        }
-      }, /*#__PURE__*/React.createElement("label", {
-        className: "form-label"
-      }, "開始日"), /*#__PURE__*/React.createElement("input", {
-        type: "date",
-        className: "form-input",
-        style: {
-          maxWidth: 180
-        },
-        value: f.longAbsenceSince || '',
-        onChange: e => setF(p => ({
-          ...p,
-          longAbsenceSince: e.target.value
-        }))
-      }), /*#__PURE__*/React.createElement("div", {
-        style: {
-          marginTop: 8
-        }
-      }, /*#__PURE__*/React.createElement("label", {
-        className: "form-label"
-      }, "理由"), /*#__PURE__*/React.createElement("input", {
-        type: "text",
-        className: "form-input",
-        placeholder: "例: 骨折のため自宅療養中",
-        value: f.longAbsenceReason || '',
-        onChange: e => setF(p => ({
-          ...p,
-          longAbsenceReason: e.target.value
-        }))
-      })), /*#__PURE__*/React.createElement("div", {
-        style: {
-          marginTop: 8
-        }
-      }, /*#__PURE__*/React.createElement("label", {
-        className: "form-label"
-      }, "終了日（決まったら入力）"), /*#__PURE__*/React.createElement("input", {
-        type: "date",
-        className: "form-input",
-        style: {
-          maxWidth: 180
-        },
-        value: f.longAbsenceEndDate || '',
-        onChange: e => setF(p => ({
-          ...p,
-          longAbsenceEndDate: e.target.value
-        }))
-      }), /*#__PURE__*/React.createElement("div", {
-        style: {
-          fontSize: 11,
-          color: 'var(--text3)',
-          marginTop: 4
-        }
-      }, "終了日を入力するまで、利用予定日ごとに連絡ノートへ理由を添えて自動でお休みの記録が積み増されます。")))), /*#__PURE__*/React.createElement("div", {
-        style: {
-          flex: 1,
-          minWidth: 200,
-          background: f.discontinued ? 'rgba(107,114,128,.08)' : 'rgba(107,114,128,.04)',
-          border: `1px solid ${f.discontinued ? 'rgba(107,114,128,.4)' : 'rgba(107,114,128,.2)'}`,
-          borderRadius: 8,
-          padding: '10px 14px'
-        }
-      }, /*#__PURE__*/React.createElement("div", {
-        style: {
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          marginBottom: f.discontinued ? 10 : 0
-        }
-      }, /*#__PURE__*/React.createElement("label", {
-        style: {
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          cursor: 'pointer',
-          userSelect: 'none'
-        }
-      }, /*#__PURE__*/React.createElement("input", {
-        type: "checkbox",
-        checked: !!f.discontinued,
-        onChange: e => setF(p => ({
-          ...p,
-          discontinued: e.target.checked,
-          discontinuedSince: e.target.checked ? p.discontinuedSince || today() : p.discontinuedSince
-        })),
-        style: {
-          width: 16,
-          height: 16,
-          accentColor: '#6b7280'
-        }
-      }), /*#__PURE__*/React.createElement("span", {
-        style: {
-          fontWeight: 600,
-          color: f.discontinued ? '#6b7280' : 'var(--text2)',
-          fontSize: 13
-        }
-      }, "🚫 利用中止"))), f.discontinued && /*#__PURE__*/React.createElement("div", {
-        className: "form-group",
-        style: {
-          marginBottom: 0
-        }
-      }, /*#__PURE__*/React.createElement("label", {
-        className: "form-label"
-      }, "中止日"), /*#__PURE__*/React.createElement("input", {
-        type: "date",
-        className: "form-input",
-        style: {
-          maxWidth: 180
-        },
-        value: f.discontinuedSince || '',
-        onChange: e => setF(p => ({
-          ...p,
-          discontinuedSince: e.target.value
-        }))
-      })))), (f.hospitalized || f.longAbsence || f.discontinued) && /*#__PURE__*/React.createElement("div", {
-        style: {
-          marginTop: 8,
-          fontSize: 11,
-          color: 'var(--text3)'
-        }
-      }, f.discontinued ? '利用中止中は曜日マスタへの表示・当日入力から除外されます（この期間にカルテがあると矛盾チェックで警告されます）' : '入院中・長期休みはマスタや矛盾チェックから除外されます')), /*#__PURE__*/React.createElement("div", {
-        style: {
-          border: '1px solid var(--border)',
-          borderRadius: 10,
-          padding: '12px 16px',
-          marginBottom: 14
-        }
-      }, /*#__PURE__*/React.createElement("div", {
-        style: {
-          fontSize: 12,
-          fontWeight: 600,
-          color: 'var(--text2)',
-          marginBottom: 10
-        }
-      }, "利用曜日・サービス内容", /*#__PURE__*/React.createElement("span", {
-        style: {
-          fontWeight: 400,
-          color: 'var(--text3)',
-          marginLeft: 6
-        }
-      }, "（保存すると各曜日マスタに自動反映されます）")), /*#__PURE__*/React.createElement("div", {
-        style: {
-          display: 'flex',
-          gap: 6,
-          flexWrap: 'wrap',
-          marginBottom: 12
-        }
-      }, DAYS.map(d => /*#__PURE__*/React.createElement("span", {
-        key: d,
-        onClick: () => toggleUseDay(d),
-        className: `day-tag ${svc.useDays.includes(d) ? 'day-active' : 'day-inactive'}`,
-        style: {
-          width: 36,
-          height: 36,
-          fontSize: 13,
-          cursor: 'pointer'
-        }
-      }, d, "曜日"))), svc.useDays.length > 0 && /*#__PURE__*/React.createElement("div", {
-        style: {
-          display: 'flex',
-          gap: 16,
-          flexWrap: 'wrap',
-          alignItems: 'flex-end'
-        }
-      }, /*#__PURE__*/React.createElement("div", {
-        className: "form-group",
-        style: {
-          marginBottom: 0
-        }
-      }, /*#__PURE__*/React.createElement("label", {
-        className: "form-label"
-      }, "入浴"), /*#__PURE__*/React.createElement("select", {
-        className: "form-select",
-        style: {
-          width: 90
-        },
-        value: svc.bath ? '○' : '×',
-        onChange: e => setSvc(p => ({...p, bath: e.target.value === '○'}))
-      }, /*#__PURE__*/React.createElement("option", {value: "×"}, "×"), /*#__PURE__*/React.createElement("option", {value: "○"}, "○"))), svc.bath && /*#__PURE__*/React.createElement("div", {
-        className: "form-group",
-        style: {
-          marginBottom: 0
-        }
-      }, /*#__PURE__*/React.createElement("label", {
-        className: "form-label"
-      }, "入浴方法"), /*#__PURE__*/React.createElement("select", {
-        className: "form-select",
-        style: {
-          width: 140
-        },
-        value: svc.bathMethod,
-        onChange: e => setSvc(p => ({...p, bathMethod: e.target.value}))
-      }, /*#__PURE__*/React.createElement("option", {value: ""}, "選択"), BATH_METHODS.map(m => /*#__PURE__*/React.createElement("option", {
-        key: m,
-        value: m
-      }, m)))), /*#__PURE__*/React.createElement("div", {
-        className: "form-group",
-        style: {
-          marginBottom: 0
-        }
-      }, /*#__PURE__*/React.createElement("label", {
-        className: "form-label"
-      }, "排泄援助"), /*#__PURE__*/React.createElement("select", {
-        className: "form-select",
-        style: {
-          width: 90
-        },
-        value: svc.toiletAssist ? '○' : '×',
-        onChange: e => setSvc(p => ({...p, toiletAssist: e.target.value === '○'}))
-      }, /*#__PURE__*/React.createElement("option", {value: "×"}, "×"), /*#__PURE__*/React.createElement("option", {value: "○"}, "○"))), /*#__PURE__*/React.createElement("div", {
-        className: "form-group",
-        style: {
-          marginBottom: 0,
-          flex: 1,
-          minWidth: 200
-        }
-      }, /*#__PURE__*/React.createElement("label", {
-        className: "form-label"
-      }, "リハビリ区分"), /*#__PURE__*/React.createElement("select", {
-        className: "form-select",
-        value: svc.rehabCategory,
-        onChange: e => setSvc(p => ({...p, rehabCategory: e.target.value}))
-      }, /*#__PURE__*/React.createElement("option", {value: ""}, "選択してください"), REHAB_CATS.map(c => /*#__PURE__*/React.createElement("option", {
-        key: c,
-        value: c
-      }, c))))), svc.useDays.length === 0 && /*#__PURE__*/React.createElement("div", {
-        style: {
-          fontSize: 11,
-          color: 'var(--text3)'
-        }
-      }, "曜日を選択すると、入浴・リハビリ区分などを設定できます。")), /*#__PURE__*/React.createElement("div", {
-        style: {
-          border: '1px solid var(--border)',
-          borderRadius: 10,
-          padding: '12px 16px',
-          marginBottom: 14
-        }
-      }, /*#__PURE__*/React.createElement("div", {
-        style: {
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          marginBottom: 10
-        }
-      }, /*#__PURE__*/React.createElement("span", {
-        style: {
-          fontWeight: 600,
-          fontSize: 13,
-          color: 'var(--text)'
-        }
-      }, "📅 利用曜日変更履歴"), /*#__PURE__*/React.createElement("div", {
-        style: {
-          flex: 1
-        }
-      }), /*#__PURE__*/React.createElement("button", {
-        className: "btn btn-ghost btn-sm",
-        onClick: () => setShowHistForm(v => !v)
-      }, "＋ 記録追加")), showHistForm && /*#__PURE__*/React.createElement("div", {
-        style: {
-          background: 'var(--bg2)',
-          borderRadius: 8,
-          padding: '10px 12px',
-          marginBottom: 10,
-          border: '1px solid var(--border)'
-        }
-      }, /*#__PURE__*/React.createElement("div", {
-        className: "grid-2",
-        style: {
-          marginBottom: 8
-        }
-      }, /*#__PURE__*/React.createElement("div", {
-        className: "form-group",
-        style: {
-          marginBottom: 0
-        }
-      }, /*#__PURE__*/React.createElement("label", {
-        className: "form-label"
-      }, "変更日"), /*#__PURE__*/React.createElement("input", {
-        type: "date",
-        className: "form-input",
-        value: newHist.date,
-        onChange: e => setNewHist(p => ({
-          ...p,
-          date: e.target.value
-        }))
-      })), /*#__PURE__*/React.createElement("div", {
-        className: "form-group",
-        style: {
-          marginBottom: 0
-        }
-      }, /*#__PURE__*/React.createElement("label", {
-        className: "form-label"
-      }, "変更後の利用曜日"), /*#__PURE__*/React.createElement("div", {
-        style: {
-          display: 'flex',
-          gap: 4,
-          flexWrap: 'wrap',
-          marginTop: 2
-        }
-      }, DAYS.map(d => /*#__PURE__*/React.createElement("span", {
-        key: d,
-        onClick: () => toggleDay(d),
-        className: `day-tag ${newHist.days.includes(d) ? 'day-active' : 'day-inactive'}`,
-        style: {
-          width: 30,
-          height: 30,
-          fontSize: 12,
-          cursor: 'pointer'
-        }
-      }, d)))), /*#__PURE__*/React.createElement("div", {
-        className: "form-group",
-        style: {
-          marginBottom: 0,
-          gridColumn: '1/-1'
-        }
-      }, /*#__PURE__*/React.createElement("label", {
-        className: "form-label"
-      }, "メモ（理由・補足）"), /*#__PURE__*/React.createElement("input", {
-        className: "form-input",
-        value: newHist.memo,
-        onChange: e => setNewHist(p => ({
-          ...p,
-          memo: e.target.value
-        })),
-        placeholder: "例：月曜→金曜に変更"
-      }))), /*#__PURE__*/React.createElement("div", {
-        style: {
-          display: 'flex',
-          gap: 8,
-          justifyContent: 'flex-end'
-        }
-      }, /*#__PURE__*/React.createElement("button", {
-        className: "btn btn-ghost btn-sm",
-        onClick: () => setShowHistForm(false)
-      }, "キャンセル"), /*#__PURE__*/React.createElement("button", {
-        className: "btn btn-gold btn-sm",
-        onClick: addHistory
-      }, "追加"))), (f.dayHistory || []).length === 0 ? /*#__PURE__*/React.createElement("div", {
-        style: {
-          fontSize: 12,
-          color: 'var(--text3)',
-          textAlign: 'center',
-          padding: '8px 0'
-        }
-      }, "変更履歴なし") : /*#__PURE__*/React.createElement("div", {
-        style: {
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 6
-        }
-      }, [...(f.dayHistory || [])].reverse().map(h => /*#__PURE__*/React.createElement("div", {
-        key: h.id,
-        style: {
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '6px 10px',
-          background: 'var(--bg2)',
-          borderRadius: 8,
-          border: '1px solid var(--border)'
-        }
-      }, /*#__PURE__*/React.createElement("span", {
-        style: {
-          fontSize: 12,
-          fontWeight: 600,
-          color: 'var(--gold-d)',
-          whiteSpace: 'nowrap'
-        }
-      }, fmtDate(h.date)), /*#__PURE__*/React.createElement("div", {
-        style: {
-          display: 'flex',
-          gap: 3
-        }
-      }, h.days.length > 0 ? h.days.map(d => /*#__PURE__*/React.createElement("span", {
-        key: d,
-        className: "day-tag day-active",
-        style: {
-          width: 22,
-          height: 22,
-          fontSize: 10
-        }
-      }, d)) : /*#__PURE__*/React.createElement("span", {
-        style: {
-          fontSize: 11,
-          color: 'var(--text3)'
-        }
-      }, "曜日未設定")), h.memo && /*#__PURE__*/React.createElement("span", {
-        style: {
-          fontSize: 12,
-          color: 'var(--text2)',
-          flex: 1
-        }
-      }, h.memo), /*#__PURE__*/React.createElement("button", {
-        style: {
-          background: 'none',
-          border: 'none',
-          color: 'var(--err)',
-          cursor: 'pointer',
-          fontSize: 14,
-          lineHeight: 1
-        },
-        onClick: () => delHistory(h.id)
-      }, "✕"))))), /*#__PURE__*/React.createElement("div", {
-        style: {
-          display: 'flex',
-          gap: 8,
-          justifyContent: 'flex-end',
-          marginTop: 6
-        }
-      }, /*#__PURE__*/React.createElement("button", {
-        className: "btn btn-ghost",
-        onClick: onClose
-      }, "キャンセル"), /*#__PURE__*/React.createElement("button", {
-        className: "btn btn-gold",
-        onClick: save
-      }, "保存")));
-    }
-    const deleteUser = id => {
-      const name = data.users.find(u => u.id === id)?.name;
-      if (!name) return;
-      if (!window.confirm(`${name} さんを削除しますか？関連する当日入力・マスタ・時間割も同時に削除されます。`)) return;
-      setData(p => {
-        // dayMasters から削除
-        const dm = {
-          ...p.dayMasters
-        };
-        DAYS.forEach(d => {
-          dm[d] = (dm[d] || []).filter(x => x.userName !== name);
-        });
-        // rehabSchedule から削除
-        const rs = {};
-        DAYS.forEach(d => {
-          rs[d] = (p.rehabSchedule[d] || []).map(slot => ({
-            ...slot,
-            users: (slot.users || []).filter(u => u !== name)
-          }));
-        });
-        // dailyAttendance から削除
-        const da = p.dailyAttendance.map(att => ({
-          ...att,
-          entries: att.entries.filter(e => e.userName !== name)
-        }));
-        return {
-          ...p,
-          users: p.users.filter(u => u.id !== id),
-          dayMasters: dm,
-          rehabSchedule: rs,
-          dailyAttendance: da
-        };
-      });
-    };
-    return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-      className: "sec-hdr"
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 12,
-        color: 'var(--text2)'
-      }
-    }, data.users.length, "名登録済み\u3000―\u3000各曜日マスタで入浴・リハビリ区分を設定してください"), /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: 'flex',
-        gap: 8
-      }
-    }, /*#__PURE__*/React.createElement("button", {
-      className: "btn btn-ghost",
-      onClick: () => setShowBulk(true)
-    }, "📋 一括インポート"), /*#__PURE__*/React.createElement("button", {
-      className: "btn btn-gold",
-      onClick: () => {
-        setEditUser(null);
-        setShowForm(true);
-      }
-    }, "＋ 利用者登録"))), /*#__PURE__*/React.createElement("div", {
-      className: "card"
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "table-wrap"
-    }, /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "利用者名"), /*#__PURE__*/React.createElement("th", null, "フリガナ"), /*#__PURE__*/React.createElement("th", null, "状態"), /*#__PURE__*/React.createElement("th", null, "登録曜日"), /*#__PURE__*/React.createElement("th", null, "備考"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, data.users.length === 0 && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
-      colSpan: 6
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "empty"
-    }, "利用者を登録してください"))), sortByKana(data.users).map(u => {
-      const regDays = DAYS.filter(d => (data.dayMasters[d] || []).some(dm => dm.userName === u.name));
-      return /*#__PURE__*/React.createElement("tr", {
-        key: u.id,
-        style: {
-          opacity: isHospitalizedNow(u) || isLongAbsenceNow(u) || u.discontinued ? 0.65 : 1
-        }
-      }, /*#__PURE__*/React.createElement("td", {
-        style: {
-          fontWeight: 500
-        }
-      }, u.name), /*#__PURE__*/React.createElement("td", {
-        style: {
-          fontSize: 12,
-          color: 'var(--text2)'
-        }
-      }, /*#__PURE__*/React.createElement(KanaCell, {user: u, setData: setData})), /*#__PURE__*/React.createElement("td", null, u.discontinued ? /*#__PURE__*/React.createElement("span", {
-        style: {
-          display: 'inline-block',
-          padding: '2px 8px',
-          borderRadius: 20,
-          fontSize: 11,
-          fontWeight: 700,
-          background: 'rgba(107,114,128,.12)',
-          color: '#6b7280',
-          border: '1px solid rgba(107,114,128,.3)',
-          whiteSpace: 'nowrap'
-        }
-      }, "🚫 利用中止", u.discontinuedSince ? `（${fmtDate(u.discontinuedSince)}〜）` : '') : isHospitalizedNow(u) ? /*#__PURE__*/React.createElement("span", {
-        style: {
-          display: 'inline-block',
-          padding: '2px 8px',
-          borderRadius: 20,
-          fontSize: 11,
-          fontWeight: 700,
-          background: 'rgba(239,68,68,.12)',
-          color: 'var(--err)',
-          border: '1px solid rgba(239,68,68,.3)',
-          whiteSpace: 'nowrap'
-        }
-      }, "🏥 入院中", u.hospitalizedSince ? `（${fmtDate(u.hospitalizedSince)}〜）` : '') : isLongAbsenceNow(u) ? /*#__PURE__*/React.createElement("span", {
-        style: {
-          display: 'inline-block',
-          padding: '2px 8px',
-          borderRadius: 20,
-          fontSize: 11,
-          fontWeight: 700,
-          background: 'rgba(124,58,237,.12)',
-          color: '#7c3aed',
-          border: '1px solid rgba(124,58,237,.3)',
-          whiteSpace: 'nowrap'
-        }
-      }, "🌙 長期休み", u.longAbsenceSince ? `（${fmtDate(u.longAbsenceSince)}〜）` : '', u.longAbsenceReason ? ` ${u.longAbsenceReason}` : '') : /*#__PURE__*/React.createElement("span", {
-        style: {
-          display: 'inline-block',
-          padding: '2px 8px',
-          borderRadius: 20,
-          fontSize: 11,
-          fontWeight: 700,
-          background: 'rgba(22,163,74,.10)',
-          color: 'var(--ok)',
-          border: '1px solid rgba(22,163,74,.25)',
-          whiteSpace: 'nowrap'
-        }
-      }, "✅ 通所中")), /*#__PURE__*/React.createElement("td", null, DAYS.map(d => /*#__PURE__*/React.createElement("span", {
-        key: d,
-        className: `day-tag ${regDays.includes(d) ? 'day-active' : 'day-inactive'}`,
-        style: {
-          width: 26,
-          height: 26,
-          fontSize: 11
-        }
-      }, d))), /*#__PURE__*/React.createElement("td", {
-        style: {
-          fontSize: 12,
-          color: 'var(--text2)',
-          maxWidth: 180
-        }
-      }, u.notes || '-'), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("div", {
-        style: {
-          display: 'flex',
-          gap: 4
-        }
-      }, /*#__PURE__*/React.createElement("button", {
-        className: "btn btn-ghost btn-sm",
-        onClick: () => {
-          setEditUser(u);
-          setShowForm(true);
-        }
-      }, "編集"), /*#__PURE__*/React.createElement("button", {
-        className: "btn btn-danger btn-sm",
-        onClick: () => deleteUser(u.id)
-      }, "削除"))));
-    }))))), showForm && /*#__PURE__*/React.createElement(UserForm, {
-      init: editUser,
-      onClose: () => {
-        setShowForm(false);
-        setEditUser(null);
-      }
-    }), showBulk && /*#__PURE__*/React.createElement(BulkImportModal, {
-      onClose: () => setShowBulk(false)
-    }));
-  }
-
-  /* ── 曜日マスタ タブ ── */
-  function DayMasterTab({
-    day
-  }) {
-    const entries = data.dayMasters[day] || [];
-    const registered = new Set(entries.map(e => e.userName));
-    // 利用中止・入院中ユーザーは追加候補から除外
-    const unassigned = sortByKana(data.users.filter(u => !registered.has(u.name) && !u.discontinued && !isHospitalizedNow(u) && !isLongAbsenceNow(u)));
-    // 利用中止ユーザーはマスタ表から非表示（データは保持）
-    const userMap = Object.fromEntries(data.users.map(u => [u.name, u]));
-    // [entry, realIndex] のペアで保持し、表示番号と実インデックスを分離
-    const visibleEntries = entries.map((e, i) => [e, i]).filter(([e]) => !userMap[e.userName]?.discontinued).sort(([a], [b]) => kanaFor(a.userName).localeCompare(kanaFor(b.userName), 'ja'));
-    const [showPanel, setShowPanel] = useState(false);
-    const [selected, setSelected] = useState(new Set());
-    const toggleUser = name => setSelected(prev => {
-      const next = new Set(prev);
-      next.has(name) ? next.delete(name) : next.add(name);
-      return next;
-    });
-    const selectAll = () => setSelected(new Set(unassigned.map(u => u.name)));
-    const selectNone = () => setSelected(new Set());
-    const addSelected = () => {
-      if (!selected.size) return;
-      const names = [...selected];
-      setData(p => {
-        const dm = {
-          ...p.dayMasters
-        };
-        const cur = dm[day] || [];
-        dm[day] = [...cur, ...names.filter(n => !cur.some(e => e.userName === n)).map(n => ({
-          userName: n,
-          bath: false,
-          bathMethod: '',
-          toiletAssist: false,
-          rehabCategory: '',
-          scheduleWeeks: [1, 2, 3, 4, 5]
-        }))];
-        return {
-          ...p,
-          dayMasters: dm
-        };
-      });
-      showToast(`${names.length}名を${DAY_NAMES[day]}マスタに追加しました`, 'ok');
-      setSelected(new Set());
-      setShowPanel(false);
-    };
-    const updateEntry = (idx, field, value) => setData(p => {
-      const dm = {
-        ...p.dayMasters
-      };
-      const rows = [...(dm[day] || [])];
-      rows[idx] = {
-        ...rows[idx],
-        [field]: value
-      };
-      dm[day] = rows;
-      return {
-        ...p,
-        dayMasters: dm
-      };
-    });
-    const removeEntry = idx => setData(p => {
-      const dm = {
-        ...p.dayMasters
-      };
-      dm[day] = (dm[day] || []).filter((_, i) => i !== idx);
-      return {
-        ...p,
-        dayMasters: dm
-      };
-    });
-    const [schedEdit, setSchedEdit] = useState(null);
-    return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        marginBottom: 14
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 13,
-        color: 'var(--text2)'
-      }
-    }, DAY_NAMES[day], "登録利用者：", /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: 'var(--gold)',
-        fontWeight: 600
-      }
-    }, visibleEntries.length, "名"), entries.length > visibleEntries.length && /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 11,
-        color: 'var(--text3)',
-        marginLeft: 6
-      }
-    }, "（利用中止 ", entries.length - visibleEntries.length, "名を非表示）")), /*#__PURE__*/React.createElement("div", {
-      style: {
-        flex: 1
-      }
-    }), unassigned.length > 0 && /*#__PURE__*/React.createElement("button", {
-      className: "btn btn-gold btn-sm",
-      onClick: () => {
-        setShowPanel(v => !v);
-        setSelected(new Set());
-      }
-    }, "＋ 利用者を追加 ", /*#__PURE__*/React.createElement("span", {
-      style: {
-        opacity: .8,
-        fontWeight: 400
-      }
-    }, "（", unassigned.length, "名）"))), showPanel && /*#__PURE__*/React.createElement("div", {
-      className: "ms-panel"
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        flexWrap: 'wrap',
-        marginBottom: 6
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 13,
-        fontWeight: 700,
-        color: 'var(--gold-d)',
-        marginRight: 4
-      }
-    }, "追加する利用者を選択"), /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 12,
-        color: 'var(--text2)',
-        background: 'rgba(201,168,76,.12)',
-        padding: '1px 8px',
-        borderRadius: 20
-      }
-    }, selected.size, "名選択中"), /*#__PURE__*/React.createElement("button", {
-      className: "btn btn-ghost btn-sm",
-      onClick: selectAll
-    }, "全選択"), /*#__PURE__*/React.createElement("button", {
-      className: "btn btn-ghost btn-sm",
-      onClick: selectNone
-    }, "解除"), /*#__PURE__*/React.createElement("div", {
-      style: {
-        flex: 1
-      }
-    }), /*#__PURE__*/React.createElement("button", {
-      className: "btn btn-gold btn-sm",
-      onClick: addSelected,
-      disabled: !selected.size
-    }, "✓ 一括追加"), /*#__PURE__*/React.createElement("button", {
-      className: "btn btn-ghost btn-sm",
-      onClick: () => setShowPanel(false)
-    }, "✕")), /*#__PURE__*/React.createElement("div", {
-      className: "ms-grid"
-    }, unassigned.map(u => /*#__PURE__*/React.createElement("div", {
-      key: u.id,
-      className: `ms-item${selected.has(u.name) ? ' sel' : ''}`,
-      onClick: () => toggleUser(u.name)
-    }, /*#__PURE__*/React.createElement("input", {
-      type: "checkbox",
-      checked: selected.has(u.name),
-      readOnly: true
-    }), u.name)))), data.users.length === 0 && /*#__PURE__*/React.createElement("div", {
-      className: "alert alert-info"
-    }, /*#__PURE__*/React.createElement("span", null, "ℹ️"), /*#__PURE__*/React.createElement("span", null, "先に「利用者リスト」タブで利用者を登録してください。")), /*#__PURE__*/React.createElement("div", {
-      className: "card"
-    }, /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", {
-      style: {
-        width: 36
-      }
-    }, "No."), /*#__PURE__*/React.createElement("th", null, "利用者名"), /*#__PURE__*/React.createElement("th", {
-      style: {
-        width: 130
-      }
-    }, "利用頻度"), /*#__PURE__*/React.createElement("th", {
-      style: {
-        width: 90
-      }
-    }, "入浴有無"), /*#__PURE__*/React.createElement("th", {
-      style: {
-        width: 150
-      }
-    }, "入浴方法"), /*#__PURE__*/React.createElement("th", {
-      style: {
-        width: 90
-      }
-    }, "排泄援助"), /*#__PURE__*/React.createElement("th", null, "リハビリ区分"), /*#__PURE__*/React.createElement("th", {
-      style: {
-        width: 60
-      }
-    }))), /*#__PURE__*/React.createElement("tbody", null, visibleEntries.length === 0 && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
-      colSpan: 8
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "empty"
-    }, "利用者を追加してください"))), visibleEntries.map(([e, realIdx], displayIdx) => /*#__PURE__*/React.createElement("tr", {
-      key: realIdx
-    }, /*#__PURE__*/React.createElement("td", {
-      style: {
-        color: 'var(--text2)'
-      }
-    }, displayIdx + 1), /*#__PURE__*/React.createElement("td", {
-      style: {
-        fontWeight: 500
-      }
-    }, e.userName), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("button", {
-      className: "btn btn-ghost btn-sm",
-      onClick: () => setSchedEdit(realIdx),
-      style: {
-        fontSize: 11,
-        whiteSpace: 'nowrap'
-      }
-    }, fmtSchedule(e.scheduleWeeks), " ✏️")), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("select", {
-      className: "form-select",
-      style: {
-        padding: '4px 8px',
-        fontSize: 12
-      },
-      value: e.bath ? '○' : '×',
-      onChange: v => updateEntry(realIdx, 'bath', v.target.value === '○')
-    }, /*#__PURE__*/React.createElement("option", {
-      value: "○"
-    }, "○"), /*#__PURE__*/React.createElement("option", {
-      value: "×"
-    }, "×"))), /*#__PURE__*/React.createElement("td", null, e.bath ? /*#__PURE__*/React.createElement("select", {
-      className: "form-select",
-      style: {
-        padding: '4px 8px',
-        fontSize: 12
-      },
-      value: e.bathMethod,
-      onChange: v => updateEntry(realIdx, 'bathMethod', v.target.value)
-    }, /*#__PURE__*/React.createElement("option", {
-      value: ""
-    }, "選択"), BATH_METHODS.map(m => /*#__PURE__*/React.createElement("option", {
-      key: m,
-      value: m
-    }, m))) : /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: 'var(--text3)',
-        fontSize: 12
-      }
-    }, "—")), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("select", {
-      className: "form-select",
-      style: {
-        padding: '4px 8px',
-        fontSize: 12
-      },
-      value: e.toiletAssist ? '○' : '×',
-      onChange: v => updateEntry(realIdx, 'toiletAssist', v.target.value === '○')
-    }, /*#__PURE__*/React.createElement("option", {
-      value: "○"
-    }, "○"), /*#__PURE__*/React.createElement("option", {
-      value: "×"
-    }, "×"))), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("select", {
-      className: "form-select",
-      style: {
-        padding: '4px 8px',
-        fontSize: 12
-      },
-      value: e.rehabCategory,
-      onChange: v => updateEntry(realIdx, 'rehabCategory', v.target.value)
-    }, /*#__PURE__*/React.createElement("option", {
-      value: ""
-    }, "選択してください"), REHAB_CATS.map(c => /*#__PURE__*/React.createElement("option", {
-      key: c,
-      value: c
-    }, c)))), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("button", {
-      className: "btn btn-danger btn-sm",
-      onClick: () => removeEntry(realIdx)
-    }, "削除"))))))), schedEdit !== null && /*#__PURE__*/React.createElement(ScheduleCalendarModal, {
-      day: day,
-      scheduleWeeks: entries[schedEdit]?.scheduleWeeks || [1, 2, 3, 4, 5],
-      onSave: weeks => {
-        updateEntry(schedEdit, 'scheduleWeeks', weeks);
-        setSchedEdit(null);
-      },
-      onClose: () => setSchedEdit(null)
-    }));
-  }
-
-  /* ── スタッフ タブ ── */
-  function StaffTab() {
-    const [sName, setSName] = useState('');
-    const add = () => {
-      if (!sName.trim()) return;
-      setData(p => ({
-        ...p,
-        staff: [...p.staff, {
-          id: uid(),
-          name: sName.trim()
-        }]
-      }));
-      setSName('');
-    };
-    return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-      className: "card",
-      style: {
-        marginBottom: 12
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: 'flex',
-        gap: 8
-      }
-    }, /*#__PURE__*/React.createElement("input", {
-      className: "form-input",
-      value: sName,
-      onChange: e => setSName(e.target.value),
-      placeholder: "スタッフ名を入力してEnter",
-      onKeyDown: e => e.key === 'Enter' && add()
-    }), /*#__PURE__*/React.createElement("button", {
-      className: "btn btn-gold",
-      onClick: add,
-      style: {
-        whiteSpace: 'nowrap'
-      }
-    }, "＋ 追加"))), /*#__PURE__*/React.createElement("div", {
-      className: "card"
-    }, data.staff.length === 0 ? /*#__PURE__*/React.createElement("div", {
-      className: "empty"
-    }, "スタッフが登録されていません") : /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 8
-      }
-    }, data.staff.map(s => /*#__PURE__*/React.createElement("div", {
-      key: s.id,
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        padding: '6px 12px',
-        background: 'var(--bg2)',
-        borderRadius: 8,
-        border: '1px solid var(--border)'
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 13
-      }
-    }, s.name), /*#__PURE__*/React.createElement("button", {
-      style: {
-        background: 'none',
-        border: 'none',
-        color: 'var(--err)',
-        cursor: 'pointer',
-        fontSize: 13
-      },
-      onClick: () => setData(p => ({
-        ...p,
-        staff: p.staff.filter(x => x.id !== s.id)
-      }))
-    }, "✕"))))));
-  }
   const TABS = [{
     id: 'list',
     label: `利用者リスト（${data.users.length}名）`
@@ -4298,9 +4320,17 @@ function UserManagement({
     key: t.id,
     className: `tab ${tab === t.id ? 'active' : ''}`,
     onClick: () => setTab(t.id)
-  }, t.label))), tab === 'list' && /*#__PURE__*/React.createElement(UserListTab, null), DAYS.includes(tab) && /*#__PURE__*/React.createElement(DayMasterTab, {
+  }, t.label))), tab === 'list' && /*#__PURE__*/React.createElement(UserListTab, {
+    data: data,
+    setData: setData
+  }), DAYS.includes(tab) && /*#__PURE__*/React.createElement(DayMasterTab, {
+    data: data,
+    setData: setData,
     day: tab
-  }), tab === 'staff' && /*#__PURE__*/React.createElement(StaffTab, null));
+  }), tab === 'staff' && /*#__PURE__*/React.createElement(StaffTab, {
+    data: data,
+    setData: setData
+  }));
 }
 
 /* ══ NoteForm（ContactNotes外に定義 → 毎レンダリングで別コンポーネントになる問題を防ぐ） ══ */
