@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.17.0';
+const APP_VERSION = '2.18.0';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -1449,11 +1449,98 @@ function pushSyncLog(d) {
   __syncLog.push({ seq: ++__syncSeq, t: Date.now(), d });
   saveSyncLog();
 }
+// 開いている他の画面に「生きているか」を問い合わせ、応答の無い（閉じられた）
+// 画面に残った未送信のログをすぐ引き継ぐ。起動直後に、前回閉じた画面の
+// 未送信分が表示されない（＝消えたように見える）時間を作らないため。
+let __syncBC = null;
+try {
+  __syncBC = new BroadcastChannel('serenova_sync');
+  __syncBC.addEventListener('message', e => {
+    if (e.data && e.data.type === 'ping') __syncBC.postMessage({ type: 'pong', id: SYNC_TAB_ID });
+  });
+} catch {}
+function adoptClosedTabsNow() {
+  return new Promise(resolve => {
+    const store = readSyncStore();
+    const others = store ? Object.keys(store.tabs).filter(id => id !== SYNC_TAB_ID && (store.tabs[id].log || []).length) : [];
+    if (!others.length) return resolve(false);
+    const alive = new Set();
+    const onMsg = e => {
+      if (e.data && e.data.type === 'pong') alive.add(e.data.id);
+    };
+    try {
+      if (__syncBC) {
+        __syncBC.addEventListener('message', onMsg);
+        __syncBC.postMessage({ type: 'ping', from: SYNC_TAB_ID });
+      }
+    } catch {}
+    setTimeout(() => {
+      try {
+        if (__syncBC) __syncBC.removeEventListener('message', onMsg);
+      } catch {}
+      const st = readSyncStore();
+      if (!st) return resolve(false);
+      Object.keys(st.tabs).forEach(id => {
+        if (id !== SYNC_TAB_ID && !alive.has(id)) st.tabs[id].hb = 0;
+      });
+      const adopted = adoptOrphanLogs(st, false);
+      if (adopted) saveSyncLog(st);
+      resolve(adopted);
+    }, 700);
+  });
+}
+
+/* ── 送信済みの記録（親機のデータが巻き戻った時の再送用） ──
+   親機に届いた入力も、3日間はこのPCに控えておく。親機のデータが以前の状態に
+   戻っていた（親機の二重起動で古いデータを持つ方が残った・バックアップから
+   戻した等）と分かった時、その版より後に届けた入力を未送信に戻して送り直す。 */
+const SYNC_SENT_KEY = 'serenova_sent_journal';
+const SYNC_SENT_KEEP_MS = 3 * 24 * 3600 * 1000;
+let __sentJournal = (() => {
+  try {
+    const v = JSON.parse(localStorage.getItem(SYNC_SENT_KEY) || '[]');
+    return Array.isArray(v) ? v.filter(e => e && e.d) : [];
+  } catch {
+    return [];
+  }
+})();
+function saveSentJournal() {
+  const now = Date.now();
+  __sentJournal = __sentJournal.filter(e => now - (e.t || 0) < SYNC_SENT_KEEP_MS).slice(-1500);
+  try {
+    localStorage.setItem(SYNC_SENT_KEY, JSON.stringify(__sentJournal));
+  } catch {}
+}
+function recordSent(entries, rev) {
+  if (!entries.length) return;
+  entries.forEach(e => __sentJournal.push({ t: e.t || Date.now(), ackRev: rev, d: e.d }));
+  saveSentJournal();
+}
+function requeueLostSent(rev) {
+  const lost = __sentJournal.filter(e => typeof e.ackRev === 'number' && e.ackRev > rev);
+  if (!lost.length) return 0;
+  __sentJournal = __sentJournal.filter(e => !(typeof e.ackRev === 'number' && e.ackRev > rev));
+  saveSentJournal();
+  // 巻き戻って失われた入力は、まだ送っていない入力より前に入力されたもの
+  __syncLog = lost.sort((a, b) => (a.t || 0) - (b.t || 0)).map(e => ({ t: e.t, d: e.d })).concat(__syncLog).map(e => ({ ...e, seq: ++__syncSeq }));
+  saveSyncLog();
+  return lost.length;
+}
+// 親機とのやり取りで分かった問題（画面に理由を出す）
+let __syncIssue = '';
+function describeSyncIssue(reason) {
+  const r = String(reason || '');
+  if (r.startsWith('not_registered')) return 'このPCが親機に登録されていません。画面を再読み込みしてください。';
+  if (r.startsWith('data_load_failed')) return '親機がデータ(data.json)を読み込めていません。親機のPCを再起動してください。';
+  if (r.startsWith('write_failed')) return '親機がデータを保存できません。親機のPCの空き容量やウイルス対策ソフトの設定を確認してください。';
+  if (r === 'rollback') return '親機のデータが以前の状態に戻っていました（親機の二重起動など）。このPCから送った入力を送り直しています。親機のPCを再起動してください。';
+  return '親機と通信できません。親機のPCと SmartSync が起動しているか確認してください。';
+}
 // 親機の最新データ（版番号つき）。最後に親機と一致を確認したもの。
 let __serverBase = null;
-function setServerBase(rev, data) {
-  // 古い応答で新しい版を踏み潰さない
-  if (__serverBase && typeof rev === 'number' && typeof __serverBase.rev === 'number' && rev < __serverBase.rev) return false;
+function setServerBase(rev, data, force) {
+  // 古い応答で新しい版を踏み潰さない（親機のデータが巻き戻った場合は force）
+  if (!force && __serverBase && typeof rev === 'number' && typeof __serverBase.rev === 'number' && rev < __serverBase.rev) return false;
   __serverBase = { rev, data };
   __baseRev = rev;
   return true;
@@ -7456,14 +7543,40 @@ function App() {
   }, []);
 
   // 未送信の変更の状況（サイドバーの表示用）。offline=親機に届かない状態。
-  const [unsent, setUnsent] = useState({ count: __syncLog.length, stale: false, offline: false });
+  const [unsent, setUnsent] = useState({ count: __syncLog.length, stale: false, offline: false, issue: '' });
   const refreshUnsent = useCallback(offline => setUnsent(p => {
     const count = __syncLog.length;
     // 保存のたびに一瞬だけ表示が出ないよう、5秒以上届いていない時だけ「未送信」とする
     const stale = count > 0 && Date.now() - (__syncLog[0].t || 0) > 5000;
     const off = count === 0 ? false : (offline === undefined ? p.offline : offline);
-    return p.count === count && p.stale === stale && p.offline === off ? p : { count, stale, offline: off };
+    const issue = __syncIssue;
+    return p.count === count && p.stale === stale && p.offline === off && p.issue === issue ? p : { count, stale, offline: off, issue };
   }), []);
+  // 親機とのやり取りの問題を記録し、初めての理由ならお知らせを出す
+  const lastIssueToastRef = useRef('');
+  const reportIssue = useCallback(reason => {
+    if (!reason && __syncIssue === describeSyncIssue('rollback')) return;
+    __syncIssue = reason ? describeSyncIssue(reason) : '';
+    refreshUnsent();
+    if (__syncIssue && lastIssueToastRef.current !== __syncIssue) {
+      lastIssueToastRef.current = __syncIssue;
+      showToast(__syncIssue + '（入力はこのPCに保存されています）', 'warn');
+    }
+    if (!__syncIssue) lastIssueToastRef.current = '';
+  }, []);
+  // 端末登録が親機から消えていた場合、一度だけ登録し直してみる（親機のPCなら
+  // ペアリングコード不要で通る。他のPCで通らない時は再読み込みを案内する）
+  const lastReRegisterRef = useRef(0);
+  const tryReRegister = useCallback(async () => {
+    if (Date.now() - lastReRegisterRef.current < 60000) return false;
+    lastReRegisterRef.current = Date.now();
+    try {
+      const r = await rawCall('register_device', { name: navigator.platform || '' }, 5000);
+      return !!(r && r.ok);
+    } catch {
+      return false;
+    }
+  }, []);
   const wasOfflineRef = useRef(false);
 
   // 親機の最新データが変わった時、その上に未送信の変更を重ね直して画面に出す
@@ -7473,7 +7586,10 @@ function App() {
 
   // 親機から受け取ったデータを「親機の最新」として採用する。
   // 初回だけ、変更ログ導入前の版からの移行と、親機が空の場合の初期投入を行う。
-  const adoptServer = useCallback((rev, json) => {
+  // rollback: 'confirm'＝親機の現在の版として確実な応答（競合の応答・2回続けて
+  // 同じ低い版が見えた）なので、手元の版より古くても採用して巻き戻りとして扱う。
+  const lowerRevRef = useRef({ rev: null, count: 0 });
+  const adoptServer = useCallback((rev, json, rollback) => {
     let server;
     try {
       server = normalizeData(json ? JSON.parse(json) : {});
@@ -7482,7 +7598,27 @@ function App() {
       return false;
     }
     const first = !__serverBase;
-    if (!setServerBase(rev, server)) return false;
+    let rolledBack = false;
+    if (!first && typeof rev === 'number' && typeof __serverBase.rev === 'number' && rev < __serverBase.rev) {
+      // 親機の版が手元より古い。取得と保存が前後しただけの古い応答のこともあるので、
+      // ポーリングでは同じ版が2回続けて見えた時に「親機のデータが巻き戻った」と判断する。
+      if (rollback !== 'confirm') {
+        const lr = lowerRevRef.current;
+        lowerRevRef.current = lr.rev === rev ? { rev, count: lr.count + 1 } : { rev, count: 1 };
+        if (lowerRevRef.current.count < 2) return false;
+      }
+      rolledBack = true;
+    }
+    lowerRevRef.current = { rev: null, count: 0 };
+    if (!setServerBase(rev, server, rolledBack)) return false;
+    // 親機のデータが巻き戻っていた（親機の二重起動で古いデータを持つ方が残った、
+    // バックアップから戻した等）→ その版より後に届けたはずの入力を送り直す。
+    // 起動時（前回このPCから送った入力が、今の親機の版より後の版で届いていた）も同様。
+    const requeued = typeof rev === 'number' ? requeueLostSent(rev) : 0;
+    if (rolledBack || requeued) {
+      reportIssue('rollback');
+      if (requeued) showToast(`親機のデータが以前の状態に戻っていました。このPCから送った入力 ${requeued} 件を送り直します。`, 'warn');
+    }
     if (first) {
       const local = dataRef.current;
       if (!json) {
@@ -7505,7 +7641,7 @@ function App() {
     }
     showComposed();
     return true;
-  }, [showComposed]);
+  }, [showComposed, reportIssue]);
 
   // 未送信の変更ログを親機へ送る（同時に1つだけ動く）。送れるだけ送り、
   // 親機に届かなければログを残したまま止まる（ポーリングが再開させる）。
@@ -7554,10 +7690,15 @@ function App() {
             r = await rawCall('load_data', {});
           } catch {}
           if (!r || r.rev === undefined) {
+            if (r && String(r.reason || '').startsWith('not_registered') && (await tryReRegister())) continue;
+            reportIssue(r && r.reason ? r.reason : 'offline');
             offline = true;
             break;
           }
-          adoptServer(r.rev, r.json);
+          if (!adoptServer(r.rev, r.json, 'confirm')) {
+            offline = true;
+            break;
+          }
           continue;
         }
         const cand = composeWithLog(__serverBase.data);
@@ -7568,19 +7709,25 @@ function App() {
         if (r && r.ok) {
           __serverBase = { rev: r.rev, data: cand };
           __baseRev = r.rev;
-          // 届いた分だけログから消す（送信中に増えた分は次の周回で送る）
+          // 届いた分だけログから消す（送信中に増えた分は次の周回で送る）。
+          // 届けた入力は、親機のデータが巻き戻った時に送り直せるよう控えておく。
+          recordSent(__syncLog.filter(e => e.seq <= upto), r.rev);
           __syncLog = __syncLog.filter(e => e.seq > upto);
           saveSyncLog();
+          reportIssue('');
           continue;
         }
         if (r && r.conflict && r.json) {
           // 他のPCが先に保存していた → その最新に変更ログを重ね直して送り直す
-          adoptServer(r.rev, r.json);
+          // （競合の応答は親機の現在の版なので、手元より古ければ巻き戻りとして扱う）
+          adoptServer(r.rev, r.json, 'confirm');
           if (++conflicts > 30) break; // 異常時の暴走防止（次のポーリングで再開）
           await new Promise(res => setTimeout(res, 100 + Math.random() * 300));
           continue;
         }
-        // 通信できない（親機が止まっている・未登録など）→ ログは残す
+        // 通信できない（親機が止まっている・未登録・親機が保存できない等）→ ログは残す
+        if (r && String(r.reason || '').startsWith('not_registered') && (await tryReRegister())) continue;
+        reportIssue(r && r.reason ? r.reason : 'offline');
         offline = true;
         break;
       }
@@ -7593,7 +7740,7 @@ function App() {
       }
       refreshUnsent(offline);
     }
-  }, [adoptServer, refreshUnsent]);
+  }, [adoptServer, refreshUnsent, reportIssue, tryReRegister]);
 
   useEffect(() => {
     __refreshFromServer = async () => {
@@ -7681,11 +7828,15 @@ function App() {
     const tick = () => {
       if (stopped || busy || syncRunning.current) return;
       busy = true;
-      rawCall('get_rev', {}).then(r => {
+      rawCall('get_rev', {}).then(async r => {
         if (!r || r.rev === undefined) {
-          if (__syncLog.length) refreshUnsent(true);
+          // 未登録になっていた（親機の端末一覧から消えた等）なら登録し直してみる
+          if (r && String(r.reason || '').startsWith('not_registered') && (await tryReRegister())) return;
+          reportIssue(r && r.reason ? r.reason : 'offline');
+          refreshUnsent(true);
           return;
         }
+        reportIssue('');
         if (__serverBase && r.rev === __serverBase.rev) {
           // 親機は最後に確認した版のまま。未送信があれば送る
           if (__syncLog.length) return runSync();
@@ -7700,7 +7851,8 @@ function App() {
           if (__syncLog.length) return runSync();
         });
       }).catch(() => {
-        if (__syncLog.length) refreshUnsent(true);
+        reportIssue('offline');
+        refreshUnsent(true);
       }).then(() => {
         busy = false;
         // 閉じられた別の画面に残っていた未送信のログを引き継いだら、画面に反映して送る
@@ -7722,7 +7874,17 @@ function App() {
       document.removeEventListener('visibilitychange', onWake);
       window.removeEventListener('focus', onWake);
     };
-  }, [adoptServer, runSync, showComposed, refreshUnsent]);
+  }, [adoptServer, runSync, showComposed, refreshUnsent, reportIssue, tryReRegister]);
+
+  // 起動直後、前回閉じた画面に残っていた未送信の入力をすぐ引き継ぐ
+  useEffect(() => {
+    adoptClosedTabsNow().then(adopted => {
+      if (!adopted) return;
+      showComposed();
+      runSync();
+      refreshUnsent();
+    });
+  }, []);
 
   // ふりがな自動生成（辞書から常に最新値で上書き。IME入力の不正値も修正）
   useEffect(() => {
@@ -7989,13 +8151,20 @@ function App() {
     }
   }, item.badge)))), /*#__PURE__*/React.createElement("div", {
     className: "sidebar-footer"
-  }, unsent.count > 0 && (unsent.offline || unsent.stale) ? /*#__PURE__*/React.createElement("span", {
+  }, unsent.count > 0 && (unsent.offline || unsent.stale) || unsent.issue ? /*#__PURE__*/React.createElement("span", {
     style: {
       color: 'var(--warn, #d97706)',
       fontWeight: 600
     },
     title: "入力はこのPCに保存されています。親機と通信できるようになると自動で送信します。"
-  }, "⚠ 親機に未送信の変更 ", unsent.count, " 件", /*#__PURE__*/React.createElement("br", null), "（このPCに保存済み・自動で再送します）") : "データは自動保存されます", /*#__PURE__*/React.createElement("br", null), "登録者: ", data.users.length, "名\u3000スタッフ: ", data.staff.length, "名", /*#__PURE__*/React.createElement("br", null), "v", APP_VERSION)), /*#__PURE__*/React.createElement("div", {
+  }, unsent.count > 0 && (unsent.offline || unsent.stale) ? /*#__PURE__*/React.createElement(React.Fragment, null, "⚠ 親機に未送信の変更 ", unsent.count, " 件", /*#__PURE__*/React.createElement("br", null), "（このPCに保存済み・自動で再送します）", /*#__PURE__*/React.createElement("br", null)) : null, unsent.issue ? /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 400,
+      fontSize: 11,
+      display: 'block',
+      marginTop: 2
+    }
+  }, unsent.issue) : null) : "データは自動保存されます", /*#__PURE__*/React.createElement("br", null), "登録者: ", data.users.length, "名\u3000スタッフ: ", data.staff.length, "名", /*#__PURE__*/React.createElement("br", null), "v", APP_VERSION)), /*#__PURE__*/React.createElement("div", {
     key: dispView,
     className: `main ${animCls}`
   }, dispView === 'dashboard' && /*#__PURE__*/React.createElement(Dashboard, {

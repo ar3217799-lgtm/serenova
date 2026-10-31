@@ -22,11 +22,32 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install pyinstaller
+        working-directory: windows
+        run: pip install -r requirements.txt
 
       - name: Build exe (onefile, no PyWebView)
         working-directory: windows
         run: pyinstaller SmartSync.spec --clean
+
+      - name: Smoke test (built exe, double start)
+        shell: pwsh
+        run: |
+          $d = New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\smoke"
+          Copy-Item windows\dist\SmartSync.exe "$d\SmartSync.exe"
+          Copy-Item SmartSync.html "$d\SmartSync.html"
+          $p1 = Start-Process -FilePath "$d\SmartSync.exe" -WorkingDirectory $d -PassThru
+          Start-Sleep -Seconds 10
+          $r = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8765/
+          if ($r.Content -notmatch '__smartsyncCall') { throw 'server not answering' }
+          $p2 = Start-Process -FilePath "$d\SmartSync.exe" -WorkingDirectory $d -PassThru
+          Start-Sleep -Seconds 10
+          $log = Get-Content "$d\smartsync.log" -Raw -Encoding UTF8
+          Write-Host $log
+          $ok = $p2.HasExited -and (-not $p1.HasExited) -and ($log -match '既に起動しています')
+          Get-Process SmartSync -ErrorAction SilentlyContinue | Stop-Process -Force
+          Get-Process msedge -ErrorAction SilentlyContinue | Stop-Process -Force
+          if (-not $ok) { throw "double start not prevented (p2 exited: $($p2.HasExited), p1 exited: $($p1.HasExited))" }
+          Write-Host "::notice title=smoke::2回目の起動は画面を開いて終了し、親機サーバーは1つだけ動いていることを確認"
 
       - name: Package dist
         shell: powershell
@@ -44,11 +65,13 @@ jobs:
           body: |
             ## Smart Sync ${{ github.ref_name }}
 
-            ### インストール方法
-            1. `SmartSync_Windows.zip` をダウンロードして展開
-            2. `SmartSync.exe` と `SmartSync.html` を**同じフォルダ**に置く
-            3. `SmartSync.exe` をダブルクリックで起動（Edge が自動で開きます）
+            ### 既に使っている施設の更新方法（親機のPCだけ）
+            1. `SmartSync_Windows.zip` をダウンロードして展開する
+            2. 親機のPCを再起動する（動いている SmartSync を確実に止めるため）
+            3. 親機の SmartSync フォルダにある `SmartSync.exe` を、展開した `SmartSync.exe` で上書きする
+               （`data.json`・`license.key`・`config.json`・`devices.json` はそのまま残す）
+            4. `SmartSync.exe` をダブルクリックで起動する
+            ※ 子機（他のPC）は何もしなくてよい。画面（SmartSync.html）は更新バナーから更新される。
 
-            ### 更新方法（既存ユーザー）
-            アプリ起動時に自動で更新通知が表示されます。
-            「今すぐ更新」をクリックするだけで完了します。
+            ### 新しく導入する場合
+            `SmartSync.exe` と `SmartSync.html` を同じフォルダに置き、`SmartSync.exe` をダブルクリックで起動。

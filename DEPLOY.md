@@ -73,3 +73,15 @@ python3 issue_license.py "施設名" 台数 --expires 2027-09-06
 | 台数制限を増やしたい | `issue_license.py` で新しい `.key` を発行し `license.key` を上書き |
 | ポートが使用中でエラー | `config.json` の `port` を別の番号に変更 |
 | 子機からデータが更新されない | 親機と同じネットワーク（Wi-Fi/LAN）に接続されているか確認 |
+
+## 親機の SmartSync.exe を2回起動しないこと（v2.18.0 で対策済み）
+
+旧版の SmartSync.exe は、既に動いている状態でもう一度ダブルクリックすると、
+Windows の仕様（SO_REUSEADDR）で同じポートに2つ目の親機サーバーが起動していた。
+2つのサーバーが別々のデータを持って data.json を上書きし合い、入力が共有されない・
+再起動で消える原因になる（GitHub Actions の Windows 上で再現確認済み）。
+v2.18.0 以降の exe は、既に起動していれば画面を開くだけで終了する。
+また、起動時に data.json が一時的に読めない場合に「空のデータ」で動き出さない。
+
+既存施設の exe 更新は、Releases の SmartSync_Windows.zip から SmartSync.exe だけを
+親機のフォルダに上書きする（親機のPCを再起動してから行う。data.json 等は残す）。
