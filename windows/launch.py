@@ -323,11 +323,18 @@ def regenerate_pair_code():
 # ── データ API ──────────────────────────────────────────────────────────
 def api_load_data():
     with _lock:
+        if _load_failed:
+            # 空のデータを返すと、各PCの画面が空になったり、その状態から保存されて
+            # data.json が上書きされたりするため、データは渡さない（画面は手元の
+            # 表示のまま、入力は各PCに保存され続ける）。
+            return {'ok': False, 'reason': f'data_load_failed: {_load_failed}'}
         return {'rev': _rev, 'json': _data_str}
 
 
 def api_get_rev():
     with _lock:
+        if _load_failed:
+            return {'ok': False, 'reason': f'data_load_failed: {_load_failed}'}
         return {'rev': _rev}
 
 

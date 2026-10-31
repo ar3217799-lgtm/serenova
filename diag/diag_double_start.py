@@ -16,8 +16,14 @@ open(RUN, 'w', encoding='utf-8').write(
     "import launch\nlaunch.MAX_DEVICES = 10\nlaunch.open_edge_app = lambda url: print('OPEN_EDGE ' + url, flush=True)\n"
     "launch.main()\n")
 
+_buf = []
 def note(msg):
-    print(f'::notice title={LABEL}::' + str(msg).replace('\n', ' | '), flush=True)
+    _buf.append(str(msg).replace('\n', ' | '))
+    print(msg, flush=True)
+def flush(title):
+    global _buf
+    print(f'::notice title={LABEL} {title}::' + ' ／ '.join(_buf), flush=True)
+    _buf = []
 
 def start(name):
     p = subprocess.Popen([sys.executable, '-u', RUN], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace')
@@ -70,6 +76,12 @@ def main():
     note(f'他PC（使い回しの接続）から見えるノート: {B.notes()}')
     note(f'他PCが保存: {B.add_note("nb", "他PCで入力したノート")}')
     note(f'親機の画面から見えるノート: {P.notes()}')
+    if p2.poll() is None and p1.poll() is None:
+        # 1つ目のサーバーが止まった（異常終了・タスクの終了など）後、2つ目が応答するか
+        p1.kill(); time.sleep(1.5)
+        X = Client('pc-x'); X.call('register_device', {'name': 'x'})
+        note(f'1つ目のサーバー停止後に見えるノート（2つ目のサーバー）: {X.notes()}')
+        note(f'その状態で他PCが保存: {X.add_note("nx", "1つ目停止後の入力")}')
     time.sleep(1)
     for p in (p1, p2):
         if p.poll() is None:
@@ -77,6 +89,7 @@ def main():
     time.sleep(1)
     on_disk = json.load(open(os.path.join(D, 'data.json'), encoding='utf-8'))
     note(f'両方を終了した後の data.json（＝再起動後に表示される内容）: rev={on_disk["rev"]} {[n["details"] for n in on_disk["data"]["contactNotes"]]}')
+    flush('二重起動')
 
 
 def scenario_locked():
@@ -103,6 +116,7 @@ def scenario_locked():
     on_disk = json.load(open(os.path.join(D, 'data.json'), encoding='utf-8'))
     kept = '施設の大事なデータ' in json.dumps(on_disk, ensure_ascii=False)
     note(f'[起動時ロック] 終了後の data.json: rev={on_disk.get("rev")} 元のデータが{"残っている" if kept else "消えた"} {json.dumps(on_disk.get("data"), ensure_ascii=False)[:200]}')
+    flush('起動時ロック')
 
 try:
     main()
