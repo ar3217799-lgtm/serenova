@@ -3980,26 +3980,27 @@ function DayMasterTab({
     setSelected(new Set());
     setShowPanel(false);
   };
-  const updateEntry = (idx, field, value) => setData(p => {
+  // 行は「何番目か」ではなく利用者名で特定する。番号で指定すると、他のPCが
+  // 同じ曜日の利用者を追加・削除した直後（保存の競合→最新への再適用時）に
+  // 別の人の設定を書き換えたり、氏名の無い行を作ったりしてしまうため。
+  const updateEntry = (userName, field, value) => setData(p => {
     const dm = {
       ...p.dayMasters
     };
-    const rows = [...(dm[day] || [])];
-    rows[idx] = {
-      ...rows[idx],
+    dm[day] = (dm[day] || []).map(r => r.userName === userName ? {
+      ...r,
       [field]: value
-    };
-    dm[day] = rows;
+    } : r);
     return {
       ...p,
       dayMasters: dm
     };
   });
-  const removeEntry = idx => setData(p => {
+  const removeEntry = userName => setData(p => {
     const dm = {
       ...p.dayMasters
     };
-    dm[day] = (dm[day] || []).filter((_, i) => i !== idx);
+    dm[day] = (dm[day] || []).filter(r => r.userName !== userName);
     return {
       ...p,
       dayMasters: dm
@@ -4129,7 +4130,7 @@ function DayMasterTab({
   }, /*#__PURE__*/React.createElement("div", {
     className: "empty"
   }, "利用者を追加してください"))), visibleEntries.map(([e, realIdx], displayIdx) => /*#__PURE__*/React.createElement("tr", {
-    key: realIdx
+    key: e.userName || realIdx
   }, /*#__PURE__*/React.createElement("td", {
     style: {
       color: 'var(--text2)'
@@ -4140,7 +4141,7 @@ function DayMasterTab({
     }
   }, e.userName), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("button", {
     className: "btn btn-ghost btn-sm",
-    onClick: () => setSchedEdit(realIdx),
+    onClick: () => setSchedEdit(e.userName),
     style: {
       fontSize: 11,
       whiteSpace: 'nowrap'
@@ -4152,7 +4153,7 @@ function DayMasterTab({
       fontSize: 12
     },
     value: e.bath ? '○' : '×',
-    onChange: v => updateEntry(realIdx, 'bath', v.target.value === '○')
+    onChange: v => updateEntry(e.userName, 'bath', v.target.value === '○')
   }, /*#__PURE__*/React.createElement("option", {
     value: "○"
   }, "○"), /*#__PURE__*/React.createElement("option", {
@@ -4164,7 +4165,7 @@ function DayMasterTab({
       fontSize: 12
     },
     value: e.bathMethod,
-    onChange: v => updateEntry(realIdx, 'bathMethod', v.target.value)
+    onChange: v => updateEntry(e.userName, 'bathMethod', v.target.value)
   }, /*#__PURE__*/React.createElement("option", {
     value: ""
   }, "選択"), BATH_METHODS.map(m => /*#__PURE__*/React.createElement("option", {
@@ -4182,7 +4183,7 @@ function DayMasterTab({
       fontSize: 12
     },
     value: e.toiletAssist ? '○' : '×',
-    onChange: v => updateEntry(realIdx, 'toiletAssist', v.target.value === '○')
+    onChange: v => updateEntry(e.userName, 'toiletAssist', v.target.value === '○')
   }, /*#__PURE__*/React.createElement("option", {
     value: "○"
   }, "○"), /*#__PURE__*/React.createElement("option", {
@@ -4194,7 +4195,7 @@ function DayMasterTab({
       fontSize: 12
     },
     value: e.rehabCategory,
-    onChange: v => updateEntry(realIdx, 'rehabCategory', v.target.value)
+    onChange: v => updateEntry(e.userName, 'rehabCategory', v.target.value)
   }, /*#__PURE__*/React.createElement("option", {
     value: ""
   }, "選択してください"), REHAB_CATS.map(c => /*#__PURE__*/React.createElement("option", {
@@ -4202,10 +4203,10 @@ function DayMasterTab({
     value: c
   }, c)))), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("button", {
     className: "btn btn-danger btn-sm",
-    onClick: () => removeEntry(realIdx)
+    onClick: () => removeEntry(e.userName)
   }, "削除"))))))), schedEdit !== null && /*#__PURE__*/React.createElement(ScheduleCalendarModal, {
     day: day,
-    scheduleWeeks: entries[schedEdit]?.scheduleWeeks || [1, 2, 3, 4, 5],
+    scheduleWeeks: entries.find(x => x.userName === schedEdit)?.scheduleWeeks || [1, 2, 3, 4, 5],
     onSave: weeks => {
       updateEntry(schedEdit, 'scheduleWeeks', weeks);
       setSchedEdit(null);
@@ -4877,24 +4878,44 @@ function DailyAttendance({
   };
   const addEntry = () => {
     if (!newUser) return;
-    setAtt(a => ({
-      ...a,
-      entries: [...(a.entries || []), {
-        userName: newUser,
-        substituteDay: newSub || null
-      }].sort((x, y) => kanaFor(x.userName).localeCompare(kanaFor(y.userName), 'ja'))
-    }));
+    // 同じ日に同じ人が2行になると、行を利用者名で特定できなくなる。
+    // 既に来所者にいる人を選んだ場合は行を増やさず、振替の設定だけ更新する
+    // （他のPCが先に同じ人を追加していた場合も、ここで二重登録を防ぐ）。
+    setAtt(a => {
+      const entries = a.entries || [];
+      if (entries.some(e => e.userName === newUser)) {
+        return {
+          ...a,
+          entries: entries.map(e => e.userName === newUser ? {
+            ...e,
+            substituteDay: newSub || null
+          } : e)
+        };
+      }
+      return {
+        ...a,
+        entries: [...entries, {
+          userName: newUser,
+          substituteDay: newSub || null
+        }].sort((x, y) => kanaFor(x.userName).localeCompare(kanaFor(y.userName), 'ja'))
+      };
+    });
     setNU('');
     setNS('');
     setAdd(false);
   };
-  const removeEntry = idx => setAtt(a => ({
+  // 行は「何番目か」ではなく利用者名で特定する。番号で指定すると、他のPCが
+  // 同じ日の来所者を追加・削除した直後（保存の競合→最新への再適用時）に、
+  // 別の人を削除したり別の人の入浴・リハ設定を書き換えたりしてしまうため。
+  // （画面の行番号は氏名の無い行を除いた validEntries 基準で、entries の
+  //   番号ともずれうる）
+  const removeEntry = userName => setAtt(a => ({
     ...a,
-    entries: a.entries.filter((_, i) => i !== idx)
+    entries: a.entries.filter(e => e.userName !== userName)
   }));
-  const patchEntry = (idx, patch) => setAtt(a => ({
+  const patchEntry = (userName, patch) => setAtt(a => ({
     ...a,
-    entries: a.entries.map((e, i) => i === idx ? {
+    entries: a.entries.map(e => e.userName === userName ? {
       ...e,
       ...patch
     } : e)
@@ -5153,7 +5174,7 @@ function DailyAttendance({
     // カルテからの同期で値が変わっていれば🔗マーカーを表示
     const isSynced = entry.bath !== undefined || entry.toiletAssist !== undefined || entry.rehabCategory !== undefined;
     return /*#__PURE__*/React.createElement("tr", {
-      key: idx,
+      key: entry.userName,
       style: {
         background: hasConflict ? 'rgba(248,113,113,.06)' : undefined
       }
@@ -5201,7 +5222,7 @@ function DailyAttendance({
         width: 48
       },
       value: eBath ? '○' : '×',
-      onChange: v => patchEntry(idx, {
+      onChange: v => patchEntry(entry.userName, {
         bath: v.target.value === '○',
         bathMethod: v.target.value === '○' ? eBathMethod : ''
       })
@@ -5217,7 +5238,7 @@ function DailyAttendance({
         flex: 1
       },
       value: eBathMethod,
-      onChange: v => patchEntry(idx, {
+      onChange: v => patchEntry(entry.userName, {
         bathMethod: v.target.value
       })
     }, /*#__PURE__*/React.createElement("option", {
@@ -5232,7 +5253,7 @@ function DailyAttendance({
         fontSize: 11
       },
       value: eToilet ? '○' : '×',
-      onChange: v => patchEntry(idx, {
+      onChange: v => patchEntry(entry.userName, {
         toiletAssist: v.target.value === '○'
       })
     }, /*#__PURE__*/React.createElement("option", {
@@ -5247,7 +5268,7 @@ function DailyAttendance({
         width: '100%'
       },
       value: eRehab,
-      onChange: v => patchEntry(idx, {
+      onChange: v => patchEntry(entry.userName, {
         rehabCategory: v.target.value
       })
     }, /*#__PURE__*/React.createElement("option", {
@@ -5257,7 +5278,7 @@ function DailyAttendance({
       value: c
     }, c)))), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("button", {
       className: "btn btn-danger btn-sm",
-      onClick: () => removeEntry(idx)
+      onClick: () => removeEntry(entry.userName)
     }, "削除")));
   }))))));
 }
