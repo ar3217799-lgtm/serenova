@@ -9,6 +9,9 @@ jobs:
   diag:
     runs-on: windows-latest
     timeout-minutes: 10
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
