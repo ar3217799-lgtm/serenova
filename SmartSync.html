@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.16.0';
+const APP_VERSION = '2.17.0';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -1087,6 +1087,20 @@ function normalizeData(p) {
     category: n.category || '',
     details: n.details || ''
   }));
+  // 変更ログは記録をIDで特定するため、IDの無い古い記録には内容から決まるIDを
+  // 付ける（どのPCで読み込んでも同じIDになる）。
+  const ensureIds = (arr, prefix) => {
+    const seen = {};
+    return (arr || []).map(r => {
+      if (!r || typeof r !== 'object' || r.id) return r;
+      const src = JSON.stringify(r);
+      let h = 5381;
+      for (let i = 0; i < src.length; i++) h = (h * 33 + src.charCodeAt(i)) >>> 0;
+      const base = `${prefix}-${h.toString(36)}`;
+      seen[base] = (seen[base] || 0) + 1;
+      return { ...r, id: seen[base] > 1 ? `${base}-${seen[base]}` : base };
+    });
+  };
   const fixDated = arr => (arr || []).map(r => ({
     ...r,
     date: r.date || '',
@@ -1095,11 +1109,12 @@ function normalizeData(p) {
   return {
     ...def,
     ...p,
-    users,
+    users: ensureIds(users, 'u'),
+    staff: ensureIds(p.staff, 's'),
     rehabSchedule: rs,
     dayMasters: dm,
-    contactNotes: notes,
-    karteRecords: fixDated(p.karteRecords),
+    contactNotes: ensureIds(notes, 'n'),
+    karteRecords: ensureIds(fixDated(p.karteRecords), 'k'),
     visitRecords: fixDated(p.visitRecords),
     dailyAttendance: fixDated(p.dailyAttendance),
     recBaseDate: p.recBaseDate || '2026-04-27',
@@ -1154,27 +1169,34 @@ function loadData() {
     return defaultData();
   }
 }
-/* ══ サーバーとの同期（版番号の厳密な管理） ═══════════════════════════════════
-   シム(window.pywebview.api)の save_data は「送信する瞬間のシム内部のREV」を
-   base_rev として送るが、そのREVはシム側の3秒ポーリングでも書き換わる。
-   そのため「手元のデータが基づく版」と「申告する版」がズレ、サーバーの
-   競合検出をすり抜けて他端末の保存を丸ごと上書きしてしまうこと
-   （＝入力した内容が消える）があった。
-   ここでは __baseRev として「今ローカルが保持しているデータの版」だけを
-   管理し、__smartsyncCall で base_rev を明示的に送ることでズレを無くす。 */
-let __baseRev = null;   // null = まだサーバーの版が分からない
-// サーバーへ送れていない入力が手元に残っている時刻。ネットワーク断や親機の
-// 再起動で送信に失敗した場合に立て、復旧後のポーリングで必ず送り直す。
-let __unsentSince = null;
+/* ══ サーバー（親機）との同期 ═══════════════════════════════════════════════
+   入力は「変更ログ」として、このPCに記録してから親機へ送る。
+   ・入力のたびに、直前のデータとの差分（どの記録の、どの項目を、どう変えたか・
+     追加・削除）を変更ログに追記し、localStorage にも書いておく
+     （ブラウザを閉じても・PCを再起動しても消えない）。
+   ・親機へは「親機の最新データ（版番号つき）＋未送信の変更ログ」を送る。
+     他のPCが先に保存していた（版番号が違う）場合は、その最新データに
+     変更ログを重ね直して送り直す。親機に届いた分だけログから消す。
+   ・親機が止まっている・通信できない間はログを残し続け、復旧したら自動で送る。
+   以前は、送れないまま再試行が尽きると「新しく追加した記録」しか復元できず、
+   既存の記録への書き直し（連絡ノートの修正、当日入力の振替、カルテのコメント
+   など）が復旧時に親機の古い内容で上書きされて消えていた。
+   ※ 版番号は __smartsyncCall で明示的に送る（シム内部のREVは3秒ポーリングで
+     書き換わり、他端末の保存を丸ごと上書きしてしまうことがあったため）。 */
 const hasRawSync = () => typeof window.__smartsyncCall === 'function';
-const rawCall = (m, a) => window.__smartsyncCall(m, a || {});
+// 親機が応答しない（電源断・スリープ等）と fetch がなかなか失敗しないことが
+// あるため、一定時間で打ち切って「送れなかった」扱いにする。
+const rawCall = (m, a, timeoutMs = 15000) => Promise.race([
+  window.__smartsyncCall(m, a || {}),
+  new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), timeoutMs))
+]);
+// 現在分かっている版番号（デバッグ・互換用。正は __serverBase.rev）
+let __baseRev = null;
 
 // このPC内の控え（localStorage）への書き込み。ブラウザの容量上限（約5MB）を
-// 超えると例外が出る。以前はこの例外で saveData 自体が止まり、サーバーへ
-// 送られないうえに保存中の件数(__pendingSaves)が戻らず、他のPCの変更の
-// 取り込みまで永久に止まっていた（＝入力が共有されず、再読込で消える）。
-// 控えは補助的なものなので、書けなければ古い控えを消して（古いまま残すと
-// 次回起動時に削除済みの記録が復活しうるため）サーバー保存を続ける。
+// 超えると例外が出る。以前はこの例外で保存処理自体が止まり、サーバーへ
+// 送られないうえに他のPCの変更の取り込みまで永久に止まっていた。
+// 控えは起動直後の表示用の補助なので、書けなければ古い控えを消して続ける。
 let __localCacheWarned = false;
 function writeLocalCache(json) {
   try {
@@ -1189,46 +1211,267 @@ function writeLocalCache(json) {
   }
 }
 
-function saveData(d) {
-  let json;
-  try {
-    json = JSON.stringify(d);
-  } catch (err) {
-    console.error('stringify error:', err);
-    return Promise.resolve(false);
-  }
-  writeLocalCache(json);
-  if (hasRawSync()) {
-    // 版が不明なまま送らない。base_rev を省くとサーバーが競合判定を
-    // スキップして無条件上書きになるため、必ず取得し直してから保存する
-    // （false を返すと呼び出し元が retrySave で最新を取得して再適用する）。
-    if (__baseRev === null) return Promise.resolve(false);
-    return rawCall('save_data', { json_str: json, base_rev: __baseRev }).then(r => {
-      if (r && r.ok) {
-        __baseRev = r.rev;
-        // 保存は毎回データ全体を送るため、成功した時点で手元の未送信は解消する
-        __unsentSince = null;
-        return true;
-      }
-      return false;   // 競合・失敗はいずれも retrySave に任せる
-    }).catch(() => false);
-  }
-  // 旧exe（__smartsyncCall が無い）向けのフォールバック
-  if (window.pywebview && window.pywebview.api) {
-    return window.pywebview.api.save_data(json).catch(() => false);
-  }
-  return Promise.resolve(true);
+/* ── 差分（変更ログの1件分）の計算と適用 ──
+   記録は配列の何番目かではなく、キー（id・日付・利用者名など）で特定する。
+   変更は「記録の項目単位」で持つので、他のPCが同じ記録の別の項目を
+   直していても上書きしない。 */
+const SYNC_SPEC = {
+  users: { key: 'id' },
+  staff: { key: 'id' },
+  contactNotes: { key: 'id' },
+  karteRecords: { key: 'id' },
+  visitRecords: { key: 'date' },
+  dailyAttendance: { key: 'date', nested: { entries: { key: 'userName' } } },
+  dayMasters: { byDay: { key: 'userName' } },
+  rehabSchedule: { byDay: { key: 'time' } }
+};
+const sameVal = (a, b) => a === b || JSON.stringify(a) === JSON.stringify(b);
+function keyMap(arr, k) {
+  const m = new Map();
+  (arr || []).forEach(r => {
+    if (r && r[k] !== undefined && r[k] !== null && r[k] !== '') m.set(String(r[k]), r);
+  });
+  return m;
+}
+// 記録1件の項目ごとの変更。{項目: {v:新しい値} | {n:入れ子の差分} | {u:1}(項目削除)}
+function diffFields(b, r, spec) {
+  const nested = spec.nested || {};
+  const out = {};
+  Object.keys(r).forEach(f => {
+    if (sameVal(b[f], r[f])) return;
+    if (nested[f]) {
+      const nd = diffKeyed(b[f], r[f], nested[f]);
+      if (nd) out[f] = { n: nd };
+      return;
+    }
+    out[f] = r[f] === undefined ? { u: 1 } : { v: r[f] };
+  });
+  Object.keys(b).forEach(f => {
+    if (!(f in r)) out[f] = { u: 1 };
+  });
+  return Object.keys(out).length ? out : null;
+}
+// キーで特定する配列の差分。{set: {キー: {new?:true, f:項目の変更}}, del: [キー]}
+function diffKeyed(baseArr, nextArr, spec) {
+  const base = keyMap(baseArr, spec.key);
+  const next = keyMap(nextArr, spec.key);
+  const set = {};
+  const del = [];
+  next.forEach((r, key) => {
+    const b = base.get(key);
+    if (b === r) return;
+    if (!b) {
+      set[key] = { new: true, f: diffFields({}, r, spec) };
+      return;
+    }
+    const f = diffFields(b, r, spec);
+    if (f) set[key] = { f };
+  });
+  base.forEach((_, key) => {
+    if (!next.has(key)) del.push(key);
+  });
+  return Object.keys(set).length || del.length ? { set, del } : null;
+}
+function applyFields(rec, f, spec) {
+  if (!f) return rec;
+  const nested = spec.nested || {};
+  const out = { ...rec };
+  Object.keys(f).forEach(name => {
+    const c = f[name];
+    if (c.n) out[name] = applyKeyed(rec[name] || [], c.n, nested[name]);
+    else if ('v' in c) out[name] = c.v;
+    else delete out[name];
+  });
+  return out;
+}
+function applyKeyed(arr, d, spec) {
+  if (!d) return arr;
+  const k = spec.key;
+  const del = new Set(d.del || []);
+  const set = d.set || {};
+  const seen = new Set();
+  const out = [];
+  (arr || []).forEach(r => {
+    const key = r && r[k] !== undefined && r[k] !== null && r[k] !== '' ? String(r[k]) : null;
+    if (key !== null && del.has(key)) return;
+    if (key !== null) seen.add(key);
+    const c = key !== null ? set[key] : null;
+    out.push(c ? applyFields(r, c.f, spec) : r);
+  });
+  Object.keys(set).forEach(key => {
+    if (seen.has(key)) return;
+    // 新しく追加した記録だけを足す（他のPCで削除済みの記録への変更は、
+    // その削除を尊重して足さない）
+    if (set[key].new) out.push(applyFields({}, set[key].f, spec));
+  });
+  return out;
+}
+// データ全体の差分。変化が無ければ null。
+function diffData(prev, next) {
+  if (!prev || !next || prev === next) return null;
+  const d = {};
+  new Set([...Object.keys(prev), ...Object.keys(next)]).forEach(k => {
+    const a = prev[k];
+    const b = next[k];
+    if (a === b) return;
+    const spec = SYNC_SPEC[k];
+    if (spec && spec.key) {
+      const x = diffKeyed(a, b, spec);
+      if (x) d[k] = { k: x };
+    } else if (spec && spec.byDay) {
+      const x = {};
+      new Set([...Object.keys(a || {}), ...Object.keys(b || {})]).forEach(day => {
+        const y = diffKeyed((a || {})[day], (b || {})[day], spec.byDay);
+        if (y) x[day] = y;
+      });
+      if (Object.keys(x).length) d[k] = { m: x };
+    } else if (!sameVal(a, b)) {
+      d[k] = b === undefined ? { u: 1 } : { v: b };
+    }
+  });
+  return Object.keys(d).length ? d : null;
+}
+function applyDiff(data, d) {
+  if (!d) return data;
+  const out = { ...data };
+  Object.keys(d).forEach(k => {
+    const c = d[k];
+    const spec = SYNC_SPEC[k];
+    if (c.k && spec && spec.key) out[k] = applyKeyed(data[k] || [], c.k, spec);
+    else if (c.m && spec && spec.byDay) {
+      const m = { ...(data[k] || {}) };
+      Object.keys(c.m).forEach(day => {
+        m[day] = applyKeyed(m[day] || [], c.m[day], spec.byDay);
+      });
+      out[k] = m;
+    } else if ('v' in c) out[k] = c.v;
+    else if (c.u) delete out[k];
+  });
+  return out;
 }
 
-// サーバーへの保存（競合時の再試行を含む）が完了していない件数。
-// アップデート適用のリロードが、保存が完了する前に入力内容を
-// 巻き戻してしまわないよう待ち合わせるために使う。
-let __pendingSaves = 0;
+/* ── 未送信の変更ログ（このPCに保存） ──
+   同じPCで SmartSync の画面を2つ以上開いていても互いのログを上書きしないよう、
+   画面（タブ）ごとに区画を分けて保存する（{v:2, tabs:{タブID:{hb:最終更新, log:[…]}}}）。
+   閉じられた画面に残った未送信のログは、次に開いた画面や、開いている別の画面が
+   引き継いで送る（一定時間更新の無い区画を「閉じられた」とみなす）。 */
+const SYNC_LOG_KEY = 'serenova_unsent_log';
+const SYNC_ORPHAN_MS = 150000; // 背景のタブはタイマーが最大1分間隔まで間引かれるため余裕を持たせる
+const SYNC_TAB_ID = (() => {
+  try {
+    let id = sessionStorage.getItem('serenova_tab_id');
+    if (!id) {
+      id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+      sessionStorage.setItem('serenova_tab_id', id);
+    }
+    return id;
+  } catch {
+    return 'tab-' + Math.random().toString(36).slice(2, 10);
+  }
+})();
+function readSyncStore() {
+  try {
+    const raw = localStorage.getItem(SYNC_LOG_KEY);
+    if (raw === null) return null;
+    const v = JSON.parse(raw);
+    if (v && v.v === 2 && v.tabs && typeof v.tabs === 'object') return v;
+    if (Array.isArray(v)) return { v: 2, tabs: { [SYNC_TAB_ID]: { hb: 0, log: v } } };
+  } catch {}
+  return { v: 2, tabs: {} };
+}
+// ログのキーがまだ無い＝変更ログ導入前の版から更新した直後。その場合だけ、
+// 旧方式の「控えにしか無い記録の足し戻し」を1回行う（reconcileWithLocal）。
+let __syncLogIsNew = false;
+let __syncLogWarned = false;
+let __syncLog = [];
+let __syncSeq = 0;
+// 閉じられた画面の区画に残ったログを、この画面のログへ引き継ぐ（起動時と定期的に）
+function adoptOrphanLogs(store, force) {
+  const now = Date.now();
+  let adopted = [];
+  Object.keys(store.tabs).forEach(id => {
+    if (id === SYNC_TAB_ID) return;
+    const t = store.tabs[id];
+    if (!t || !Array.isArray(t.log) || !t.log.length) {
+      delete store.tabs[id];
+      return;
+    }
+    if (force || now - (t.hb || 0) > SYNC_ORPHAN_MS) {
+      adopted = adopted.concat(t.log);
+      delete store.tabs[id];
+    }
+  });
+  if (!adopted.length) return false;
+  adopted.sort((x, y) => (x.t || 0) - (y.t || 0));
+  // 引き継いだ分は、この画面の未送信より前に入力されたものとして先頭側に並べる
+  __syncLog = adopted.filter(e => e && e.d).concat(__syncLog).map(e => ({ ...e, seq: ++__syncSeq }));
+  return true;
+}
+(() => {
+  const store = readSyncStore();
+  if (store === null) {
+    __syncLogIsNew = true;
+    return;
+  }
+  const own = store.tabs[SYNC_TAB_ID];
+  __syncLog = own && Array.isArray(own.log) ? own.log.filter(e => e && e.d) : [];
+  __syncSeq = __syncLog.reduce((m, e) => Math.max(m, e.seq || 0), 0);
+  if (adoptOrphanLogs(store, false)) saveSyncLog(store);
+})();
+// store を渡した場合はそれ（引き継いだ区画を削除済みのもの）に書き込む
+function saveSyncLog(storeArg) {
+  try {
+    const store = storeArg || readSyncStore() || { v: 2, tabs: {} };
+    if (__syncLog.length) store.tabs[SYNC_TAB_ID] = { hb: Date.now(), log: __syncLog };
+    else delete store.tabs[SYNC_TAB_ID];
+    localStorage.setItem(SYNC_LOG_KEY, JSON.stringify(store));
+  } catch (err) {
+    // 書けなくても、この画面を開いている間はメモリ上のログで送り直せる
+    if (!__syncLogWarned) {
+      __syncLogWarned = true;
+      console.warn('unsent log write failed:', err);
+    }
+  }
+}
+// 定期的に呼ぶ：生存の印を更新し、閉じられた画面のログを引き継ぐ
+function syncLogHeartbeat() {
+  try {
+    const store = readSyncStore();
+    if (!store) return false;
+    const adopted = adoptOrphanLogs(store, false);
+    if (adopted || __syncLog.length) saveSyncLog(store);
+    return adopted;
+  } catch {
+    return false;
+  }
+}
+function pushSyncLog(d) {
+  __syncLog.push({ seq: ++__syncSeq, t: Date.now(), d });
+  saveSyncLog();
+}
+// 親機の最新データ（版番号つき）。最後に親機と一致を確認したもの。
+let __serverBase = null;
+function setServerBase(rev, data) {
+  // 古い応答で新しい版を踏み潰さない
+  if (__serverBase && typeof rev === 'number' && typeof __serverBase.rev === 'number' && rev < __serverBase.rev) return false;
+  __serverBase = { rev, data };
+  __baseRev = rev;
+  return true;
+}
+// 親機の最新データに未送信の変更ログを順に重ねたもの（＝このPCの画面に出すデータ）
+function composeWithLog(base) {
+  return __syncLog.reduce((v, e) => applyDiff(v, e.d), base);
+}
+const hasUnsent = () => __syncLog.length > 0;
+// 親機の最新データを今すぐ取り込む（App が登録する）。カルテ生成のように
+// 「その時点の最新の当日入力」から作る操作の直前に呼ぶ。通信できなければ
+// 手元のデータのまま続ける。
+let __refreshFromServer = () => Promise.resolve();
 function waitForPendingSaves(timeoutMs = 8000) {
   return new Promise(resolve => {
     const start = Date.now();
     (function check() {
-      if (__pendingSaves <= 0 || Date.now() - start > timeoutMs) { resolve(); return; }
+      if (!hasUnsent() || Date.now() - start > timeoutMs) { resolve(); return; }
       setTimeout(check, 150);
     })();
   });
@@ -4992,11 +5235,13 @@ function DailyAttendance({
       ...patch
     } : e)
   }));
-  const confirmRecord = () => {
+  const confirmRecord = async () => {
     if (!validEntries.length) {
       alert('来所者を追加してください。');
       return;
     }
+    // 直前に他のPCで設定された振替などを反映するため、親機の最新を取り込んでから作る
+    await __refreshFromServer();
     // カルテは保存の直前の最新データ(p)から作る。画面描画時点の data から
     // 作ると、直前に他のPCで設定された振替などが反映されず、競合時の
     // 再適用でも古い内容のまま保存されていた。
@@ -5010,7 +5255,12 @@ function DailyAttendance({
       const existing = (p.karteRecords || []).filter(r => r.date === date);
       newKarte = generateKarteRecords(p, date, entries).map(k => {
         const old = existing.find(r => r.userName === k.userName);
-        if (!old) return k;
+        // 新しく作るカルテは、複数のPCが同時に生成しても1件にまとまるよう
+        // IDを日付と利用者名から決める
+        if (!old) return {
+          ...k,
+          id: `k-${date}-${k.userName}`
+        };
         // 振替元が変わった場合はリハ時間を割り当て直す
         const sameSubst = (old.substituteDay || null) === (k.substituteDay || null);
         const rehabTime = sameSubst && old.rehabTime ? old.rehabTime : k.rehabTime;
@@ -7199,82 +7449,178 @@ function App() {
   const commitData = useCallback(next => {
     dataRef.current = next;
     setDataRaw(next);
+    try {
+      writeLocalCache(JSON.stringify(next));
+    } catch {}
     return next;
   }, []);
 
-  // 保存が競合（他の端末が先に保存済み）で拒否された時、最新データを
-  // 取得し直して同じ変更(fn)を再適用してから保存し直す。これをせず
-  // 最新データでそのまま上書きすると、保存しようとした内容が
-  // 消えてしまう（連絡ノートの入力が消える不具合の原因だった）。
-  // __pendingSaves は setData が呼ばれてから、保存が（成功・再試行の末の
-  // 成功・再試行の末のあきらめ、いずれかで）確定するまでの間だけ加算する。
-  // アップデート適用時のリロードは waitForPendingSaves() でこれが 0 になる
-  // のを待ってから行い、保存中の入力がリロードで消えるのを防ぐ。
-  const retrySave = useCallback((fn, attempt = 0) => {
-    const usable = hasRawSync() || (window.pywebview && window.pywebview.api);
-    if (typeof fn !== 'function' || !usable) {
-      // ここで送れなかった内容は手元にだけ残るので、印を付けて
-      // ポーリング側から必ず送り直させる（諦めて消さない）。
-      __unsentSince = __unsentSince || Date.now();
-      __pendingSaves--;
-      return;
-    }
-    if (attempt >= 8) {
-      // 一旦ここで打ち切るが、内容は手元に残したまま未送信の印を立て、
-      // 通信が回復し次第ポーリングが自動で送り直す。
-      __unsentSince = __unsentSince || Date.now();
-      showToast('保存が混み合っています。通信の回復後に自動で保存し直します。', 'warn');
-      __pendingSaves--;
-      return;
-    }
-    // 混み合っている時に間を置かず連打すると衝突が続きやすいため、
-    // 試行のたびに少し待ってから取り直す（3台が同時に保存する状況を想定）。
-    new Promise(r => setTimeout(r, Math.min(300 * (attempt + 1), 2000))).then(() => {
-      if (!hasRawSync()) {
-        // 旧exe向けフォールバック（版番号を明示できないため従来どおり）
-        return window.pywebview.api.load_data().then(json => {
-          if (!json) { __pendingSaves--; return; }
-          const rebased = fn(normalizeData(JSON.parse(json)));
-          commitData(rebased);
-          saveData(rebased).then(ok => {
-            if (ok === false) retrySave(fn, attempt + 1);
-            else __pendingSaves--;
-          });
-        }).catch(() => { __pendingSaves--; });
-      }
-      // 取得した版(r.rev)と、その中身(r.json)から作った rebased を、
-      // 途中に非同期の切れ目を挟まずそのまま保存する。これにより
-      // base_rev と送信データの版が必ず一致する。
-      return rawCall('load_data', {}).then(r => {
-        // 応答が取れない（親機が落ちている・未登録など）場合も、諦めず
-        // 間隔を空けて再試行する。通信の瞬断で入力が失われないようにする。
-        if (!r || r.rev === undefined) { retrySave(fn, attempt + 1); return; }
-        // サーバーが空（新規導入直後）なら手元のデータをそのまま採用する。
-        const latest = r.json ? normalizeData(JSON.parse(r.json)) : dataRef.current;
-        const rebased = fn(latest);
-        __baseRev = r.rev;
-        commitData(rebased);
-        saveData(rebased).then(ok => {
-          if (ok === false) retrySave(fn, attempt + 1);
-          else __pendingSaves--;
-        });
-      }).catch(() => { retrySave(fn, attempt + 1); });
-    });
+  // 未送信の変更の状況（サイドバーの表示用）。offline=親機に届かない状態。
+  const [unsent, setUnsent] = useState({ count: __syncLog.length, stale: false, offline: false });
+  const refreshUnsent = useCallback(offline => setUnsent(p => {
+    const count = __syncLog.length;
+    // 保存のたびに一瞬だけ表示が出ないよう、5秒以上届いていない時だけ「未送信」とする
+    const stale = count > 0 && Date.now() - (__syncLog[0].t || 0) > 5000;
+    const off = count === 0 ? false : (offline === undefined ? p.offline : offline);
+    return p.count === count && p.stale === stale && p.offline === off ? p : { count, stale, offline: off };
+  }), []);
+  const wasOfflineRef = useRef(false);
+
+  // 親機の最新データが変わった時、その上に未送信の変更を重ね直して画面に出す
+  const showComposed = useCallback(() => {
+    if (__serverBase) commitData(composeWithLog(__serverBase.data));
   }, [commitData]);
+
+  // 親機から受け取ったデータを「親機の最新」として採用する。
+  // 初回だけ、変更ログ導入前の版からの移行と、親機が空の場合の初期投入を行う。
+  const adoptServer = useCallback((rev, json) => {
+    let server;
+    try {
+      server = normalizeData(json ? JSON.parse(json) : {});
+    } catch (err) {
+      console.error('server data parse error:', err);
+      return false;
+    }
+    const first = !__serverBase;
+    if (!setServerBase(rev, server)) return false;
+    if (first) {
+      const local = dataRef.current;
+      if (!json) {
+        // 親機にまだデータが無い（新規導入直後）→ このPCの控えの内容を送る
+        const d = diffData(server, local);
+        if (d) pushSyncLog(d);
+      } else if (__syncLogIsNew) {
+        // 旧版で送れないまま残っていた入力（控えにしか無い記録）を1回だけ足し戻す
+        const { merged, changed } = reconcileWithLocal(server, local);
+        const d = changed ? diffData(server, merged) : null;
+        if (d) {
+          pushSyncLog(d);
+          showToast('保存できていなかった入力があったため、親機へ再送信します', 'warn');
+        }
+      }
+      if (__syncLogIsNew) {
+        __syncLogIsNew = false;
+        saveSyncLog();
+      }
+    }
+    showComposed();
+    return true;
+  }, [showComposed]);
+
+  // 未送信の変更ログを親機へ送る（同時に1つだけ動く）。送れるだけ送り、
+  // 親機に届かなければログを残したまま止まる（ポーリングが再開させる）。
+  const syncRunning = useRef(false);
+  const runSync = useCallback(async () => {
+    if (syncRunning.current) return;
+    syncRunning.current = true;
+    let offline = false;
+    try {
+      let conflicts = 0;
+      while (__syncLog.length) {
+        const upto = __syncLog[__syncLog.length - 1].seq;
+        if (!hasRawSync()) {
+          const api = window.pywebview && window.pywebview.api;
+          if (!api) {
+            // 親機を使わない単独のブラウザ利用：このPCの控えが保存先
+            __syncLog = [];
+            saveSyncLog();
+            break;
+          }
+          // 旧exe（__smartsyncCall が無い）：版番号を明示できないため、
+          // 最新を取得してその上に変更ログを重ねて保存する
+          let json = null;
+          try {
+            json = await api.load_data();
+          } catch {}
+          const latest = json ? normalizeData(JSON.parse(json)) : __serverBase ? __serverBase.data : dataRef.current;
+          const cand = composeWithLog(latest);
+          let ok = false;
+          try {
+            ok = await api.save_data(JSON.stringify(cand));
+          } catch {}
+          if (!ok) {
+            offline = true;
+            break;
+          }
+          __serverBase = { rev: null, data: cand };
+          __syncLog = __syncLog.filter(e => e.seq > upto);
+          saveSyncLog();
+          continue;
+        }
+        if (!__serverBase) {
+          // 起動直後でまだ親機の版が分からない → 取得してから送る
+          let r = null;
+          try {
+            r = await rawCall('load_data', {});
+          } catch {}
+          if (!r || r.rev === undefined) {
+            offline = true;
+            break;
+          }
+          adoptServer(r.rev, r.json);
+          continue;
+        }
+        const cand = composeWithLog(__serverBase.data);
+        let r = null;
+        try {
+          r = await rawCall('save_data', { json_str: JSON.stringify(cand), base_rev: __serverBase.rev });
+        } catch {}
+        if (r && r.ok) {
+          __serverBase = { rev: r.rev, data: cand };
+          __baseRev = r.rev;
+          // 届いた分だけログから消す（送信中に増えた分は次の周回で送る）
+          __syncLog = __syncLog.filter(e => e.seq > upto);
+          saveSyncLog();
+          continue;
+        }
+        if (r && r.conflict && r.json) {
+          // 他のPCが先に保存していた → その最新に変更ログを重ね直して送り直す
+          adoptServer(r.rev, r.json);
+          if (++conflicts > 30) break; // 異常時の暴走防止（次のポーリングで再開）
+          await new Promise(res => setTimeout(res, 100 + Math.random() * 300));
+          continue;
+        }
+        // 通信できない（親機が止まっている・未登録など）→ ログは残す
+        offline = true;
+        break;
+      }
+    } finally {
+      syncRunning.current = false;
+      if (offline) wasOfflineRef.current = true;
+      if (!__syncLog.length && wasOfflineRef.current) {
+        wasOfflineRef.current = false;
+        showToast('親機に届いていなかった入力を送信しました', 'ok');
+      }
+      refreshUnsent(offline);
+    }
+  }, [adoptServer, refreshUnsent]);
+
+  useEffect(() => {
+    __refreshFromServer = async () => {
+      if (!hasRawSync() || syncRunning.current) return;
+      try {
+        const r = await rawCall('load_data', {}, 5000);
+        if (r && r.rev !== undefined && !syncRunning.current) adoptServer(r.rev, r.json);
+      } catch {}
+    };
+    return () => {
+      __refreshFromServer = () => Promise.resolve();
+    };
+  }, [adoptServer]);
+
+  // 入力（データの変更）はすべてここを通る。画面に即反映し、直前との差分を
+  // 変更ログに記録してから親機へ送る。
   const setData = useCallback(fn => {
-    // dataRef から同期的に最新を取り出して適用する（React の更新キューを
-    // 待たないため、同じ操作が二重に走ったり取りこぼされたりしない）。
-    const next = typeof fn === 'function' ? fn(dataRef.current) : fn;
+    const prev = dataRef.current;
+    const next = typeof fn === 'function' ? fn(prev) : fn;
+    if (!next || next === prev) return;
     commitData(next);
-    __pendingSaves++;
-    // saveData が想定外の例外を投げても __pendingSaves が戻らないまま
-    // （＝他PCの変更の取り込みが永久に止まる）にならないよう、必ず
-    // Promise の流れに乗せて失敗扱い→再試行にする。
-    Promise.resolve().then(() => saveData(next)).catch(() => false).then(ok => {
-      if (ok === false) retrySave(fn);
-      else __pendingSaves--;
-    });
-  }, [commitData, retrySave]);
+    const d = diffData(prev, next);
+    if (!d) return;
+    pushSyncLog(d);
+    refreshUnsent();
+    runSync();
+  }, [commitData, runSync, refreshUnsent]);
   // kana 検索マップを同期更新（このレンダリング内のソートに即反映）
   __kanaMap = Object.fromEntries(
     data.users.filter(u => u.name).map(u => [u.name, u.kana || u.name])
@@ -7312,53 +7658,20 @@ function App() {
     };
   }, []);
 
-  // サーバーから受け取ったデータを画面へ反映する。版番号(rev)も必ず一緒に
-  // 受け取り、__baseRev をその版に揃える。ここがズレると、次の保存が
-  // 他端末の変更を上書きしてしまう（入力が消える原因そのもの）ため、
-  // 「データを適用した時だけ版を進める」ことを徹底する。
-  const applyServerData = useCallback((json, rev) => {
-    // 起動時の取得と定期ポーリングが前後した場合に、古い版で新しい版を
-    // 踏み潰さないようにする（データ自体は下の突き合わせで失われない）。
-    if (typeof rev === 'number' && typeof __baseRev === 'number' && rev < __baseRev) return;
-    // 自分の保存（利用終了後の連絡ノート削除など）が進行中の間は取り込まない。
-    // reconcileWithLocal は「サーバーに無くローカルにはある」ものだけを
-    // 復元する仕組みで、逆に「ローカルが意図して削除した」ものまでは
-    // 区別できない。保存中に取得したサーバー側の古いスナップショットを
-    // ここで取り込むと、削除した直後の項目がサーバー版から復活して
-    // しまう（起動直後に restoreFromApi が2回走ることがあり、片方が
-    // 保存の完了前のスナップショットを掴むと発生する）。
-    if (__pendingSaves > 0) return;
-    let server;
-    try {
-      server = normalizeData(JSON.parse(json));
-    } catch (err) {
-      console.error('server data parse error:', err);
-      return;
-    }
-    const { merged, changed } = reconcileWithLocal(server, dataRef.current);
-    __baseRev = rev;
-    commitData(merged);
-    if (changed) {
-      // 前回の終了時（クラッシュ・離脱確認を無視して閉じた・再試行が尽きた等）に
-      // サーバーへ届かないまま残っていたローカルの入力を見つけたので書き戻す。
-      __pendingSaves++;
-      const rebase = latest => reconcileWithLocal(latest, merged).merged;
-      saveData(merged).then(ok => {
-        if (ok === false) retrySave(rebase);
-        else __pendingSaves--;
-      });
-      showToast('保存できていなかった入力があったため、サーバーへ再送信しました', 'warn');
-    }
-  }, [commitData, retrySave]);
-
-  // 他の端末の変更を取り込む。シムのイベントは版番号を持たないため使わず、
-  // 版番号と中身を一度に取得できる __smartsyncCall で自前にポーリングする。
+  // 他の端末の変更を取り込む。版番号と中身を一度に取得できる __smartsyncCall で
+  // 自前にポーリングし、未送信の変更があれば送る（親機の復旧もここで検知する）。
   useEffect(() => {
     if (!hasRawSync()) {
       // 旧exe向けフォールバック（版番号が取れないので従来どおりイベントで取り込む）
       const onRemote = e => {
-        if (e.detail.conflict || __pendingSaves > 0) return;
-        applyServerData(e.detail.json, __baseRev);
+        if (e.detail.conflict || syncRunning.current) return;
+        try {
+          __serverBase = { rev: null, data: normalizeData(JSON.parse(e.detail.json)) };
+        } catch {
+          return;
+        }
+        showComposed();
+        if (__syncLog.length) runSync();
       };
       window.addEventListener('smartsync-remote-data', onRemote);
       return () => window.removeEventListener('smartsync-remote-data', onRemote);
@@ -7366,33 +7679,37 @@ function App() {
     let stopped = false;
     let busy = false;
     const tick = () => {
-      if (stopped || busy || __pendingSaves > 0) return;
+      if (stopped || busy || syncRunning.current) return;
       busy = true;
       rawCall('get_rev', {}).then(r => {
-        if (!r || r.rev === undefined) return;
-        if (r.rev === __baseRev) {
-          if (!__unsentSince) return;
-          // サーバーは自分が最後に同期した版のまま＝他の端末は何も変えて
-          // いないので、手元のデータをそのまま送り直せば誰の入力も潰さない。
-          // （親機の再起動やWi-Fi瞬断で送れなかった分をここで回収する）
-          __pendingSaves++;
-          const snapshot = dataRef.current;
-          return saveData(snapshot).then(ok => {
-            if (ok === false) retrySave(latest => reconcileWithLocal(latest, snapshot).merged);
-            else {
-              __pendingSaves--;
-              showToast('保存できていなかった入力をサーバーへ保存しました', 'ok');
-            }
-          });
+        if (!r || r.rev === undefined) {
+          if (__syncLog.length) refreshUnsent(true);
+          return;
+        }
+        if (__serverBase && r.rev === __serverBase.rev) {
+          // 親機は最後に確認した版のまま。未送信があれば送る
+          if (__syncLog.length) return runSync();
+          return;
         }
         return rawCall('load_data', {}).then(d => {
-          if (!d || d.rev === undefined || !d.json) return;
-          // 取得している間に自分の保存が始まっていたら、この結果は捨てる
-          // （古い版で上書きしないため。次回のポーリングで取り込む）。
-          if (__pendingSaves > 0) return;
-          applyServerData(d.json, d.rev);
+          if (!d || d.rev === undefined) return;
+          // 取得している間に送信が始まっていたら、この結果は使わない
+          // （送信側が競合時に最新を受け取って重ね直す）
+          if (syncRunning.current) return;
+          adoptServer(d.rev, d.json);
+          if (__syncLog.length) return runSync();
         });
-      }).catch(() => {}).then(() => { busy = false; });
+      }).catch(() => {
+        if (__syncLog.length) refreshUnsent(true);
+      }).then(() => {
+        busy = false;
+        // 閉じられた別の画面に残っていた未送信のログを引き継いだら、画面に反映して送る
+        if (syncLogHeartbeat()) {
+          showComposed();
+          runSync();
+        }
+        refreshUnsent();
+      });
     };
     const id = setInterval(tick, 1500);
     // 画面に戻ってきた瞬間にも取り込み、別PCの入力をすぐ反映する
@@ -7405,7 +7722,7 @@ function App() {
       document.removeEventListener('visibilitychange', onWake);
       window.removeEventListener('focus', onWake);
     };
-  }, [applyServerData, retrySave]);
+  }, [adoptServer, runSync, showComposed, refreshUnsent]);
 
   // ふりがな自動生成（辞書から常に最新値で上書き。IME入力の不正値も修正）
   useEffect(() => {
@@ -7481,7 +7798,9 @@ function App() {
             if (!existingKeys.has(key)) {
               existingKeys.add(key);
               newNotes.push({
-                id: uid(),
+                // 複数のPCが同時に自動生成しても同じ記録として1件にまとまるよう、
+                // IDを利用者名と日付から決める
+                id: `auto-${src.name}-${dateStr}`,
                 recordDate: todayStr,
                 userName: src.name,
                 contactFrom: '',
@@ -7514,11 +7833,11 @@ function App() {
     };
   }, []);
 
-  // 保存がサーバーに届く前にタブを閉じる／更新すると入力内容が消えうるため、
-  // その間だけブラウザの標準的な離脱確認を出す。
+  // 親機に届いていない入力がある間は、閉じる前に確認を出す（入力はこのPCに
+  // 保存されているので閉じても消えないが、次に開くまで他のPCに共有されない）。
   useEffect(() => {
     const onBeforeUnload = e => {
-      if (__pendingSaves <= 0) return;
+      if (!hasUnsent()) return;
       e.preventDefault();
       e.returnValue = '';
     };
@@ -7548,27 +7867,24 @@ function App() {
 
   // pywebview 起動時: API が準備できたらファイルからデータを読み込む
   useEffect(() => {
-    // 起動時はサーバーの版番号(rev)も一緒に取得して __baseRev を確定させる。
-    // これが確定するまで saveData は送信せず（retrySave 経由で取得し直す）、
-    // 版が分からないまま無条件上書きしてしまうことを防ぐ。
+    // 起動時に親機の最新データと版番号を取得する。版が分かるまでは送信せず
+    // （runSync が取得してから送る）、版不明の無条件上書きを防ぐ。
     const restoreFromApi = () => {
       if (hasRawSync()) {
         rawCall('load_data', {}).then(r => {
           if (!r || r.rev === undefined) return;
-          if (!r.json) {
-            // サーバーにまだデータが無い（新規導入直後）。取り込むものは
-            // 無いが、版だけは確定させる。これをしないと __baseRev が
-            // null のままで、最初の保存が永久に送信できなくなる。
-            __baseRev = r.rev;
-            return;
-          }
-          applyServerData(r.json, r.rev);
+          adoptServer(r.rev, r.json);
+          // 前回送れないまま閉じた入力（このPCの変更ログ）があれば送る
+          if (__syncLog.length) runSync();
         }).catch(err => console.error('load_data error:', err));
         return;
       }
       if (!window.pywebview || !window.pywebview.api) return;
       window.pywebview.api.load_data().then(json => {
-        if (json) applyServerData(json, __baseRev);
+        if (!json) return;
+        __serverBase = { rev: null, data: normalizeData(JSON.parse(json)) };
+        showComposed();
+        if (__syncLog.length) runSync();
       }).catch(err => console.error('load_data error:', err));
     };
     // 施設内共有ではペアリング成立前から window.pywebview.api が存在するため、
@@ -7673,7 +7989,13 @@ function App() {
     }
   }, item.badge)))), /*#__PURE__*/React.createElement("div", {
     className: "sidebar-footer"
-  }, "データは自動保存されます", /*#__PURE__*/React.createElement("br", null), "登録者: ", data.users.length, "名\u3000スタッフ: ", data.staff.length, "名", /*#__PURE__*/React.createElement("br", null), "v", APP_VERSION)), /*#__PURE__*/React.createElement("div", {
+  }, unsent.count > 0 && (unsent.offline || unsent.stale) ? /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--warn, #d97706)',
+      fontWeight: 600
+    },
+    title: "入力はこのPCに保存されています。親機と通信できるようになると自動で送信します。"
+  }, "⚠ 親機に未送信の変更 ", unsent.count, " 件", /*#__PURE__*/React.createElement("br", null), "（このPCに保存済み・自動で再送します）") : "データは自動保存されます", /*#__PURE__*/React.createElement("br", null), "登録者: ", data.users.length, "名\u3000スタッフ: ", data.staff.length, "名", /*#__PURE__*/React.createElement("br", null), "v", APP_VERSION)), /*#__PURE__*/React.createElement("div", {
     key: dispView,
     className: `main ${animCls}`
   }, dispView === 'dashboard' && /*#__PURE__*/React.createElement(Dashboard, {
