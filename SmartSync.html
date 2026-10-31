@@ -1043,6 +1043,7 @@ const fmtSchedule = weeks => {
 
 /* ══ Storage ════════════════════════════════════════════════════════════════ */
 const STORE_KEY = 'serenova_v4';
+const NOTE_DRAFT_KEY = 'serenova_note_draft'; // 連絡ノート新規入力の書きかけ
 
 // dayMasters: { 月: [{ userName, bath, bathMethod, toiletAssist, rehabCategory }], ... }
 const defaultData = () => ({
@@ -1937,8 +1938,20 @@ function Modal({
   title,
   onClose,
   children,
-  wide
+  wide,
+  dirty
 }) {
+  // 入力欄が一度でも変更されたか（dirty で最初から入力済み扱いにできる）。以前は画面の外側（暗い部分）を1回
+  // クリックしただけで閉じ、書きかけの連絡ノート等がそのまま消えていた。
+  // 入力済みの場合は外側クリックでは閉じず、「✕ 閉じる」は確認してから閉じる。
+  const dirtyRef = useRef(!!dirty);
+  const markDirty = () => {
+    dirtyRef.current = true;
+  };
+  const requestClose = () => {
+    if (dirtyRef.current && !window.confirm('入力中の内容を破棄して閉じますか？')) return;
+    onClose();
+  };
   useEffect(() => {
     const mainEl = document.querySelector('.main');
     const saved = mainEl ? mainEl.scrollTop : 0;
@@ -1950,9 +1963,11 @@ function Modal({
   }, []);
   return ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
     className: "modal-overlay",
-    onClick: e => e.target === e.currentTarget && onClose()
+    onClick: e => e.target === e.currentTarget && !dirtyRef.current && onClose()
   }, /*#__PURE__*/React.createElement("div", {
     className: "modal",
+    onInputCapture: markDirty,
+    onChangeCapture: markDirty,
     style: wide ? {
       maxWidth: 760
     } : {}
@@ -1967,7 +1982,7 @@ function Modal({
     className: "modal-title"
   }, title), /*#__PURE__*/React.createElement("button", {
     className: "btn btn-ghost btn-sm",
-    onClick: onClose
+    onClick: requestClose
   }, "✕ 閉じる")), children)), document.body);
 }
 
@@ -4343,23 +4358,79 @@ function NoteForm({
   onSave,
   onClose
 }) {
-  const [f, setF] = useState(init || {
-    recordDate: today(),
-    userName: '',
-    contactFrom: '',
-    targetDate: today(),
-    category: '休み',
-    details: '',
-    reporter: ''
+  // 新規入力の書きかけは、このPCに控えておく。誤って閉じた・PCの再起動・
+  // 更新の再読み込みなどで画面が消えても、次に「新規入力」を開くと復元する。
+  // 保存したとき・キャンセル（破棄）したときに消す。編集時は控えない。
+  const [initial] = useState(() => {
+    if (init) return {
+      form: init,
+      restored: false
+    };
+    const blank = {
+      recordDate: today(),
+      userName: '',
+      contactFrom: '',
+      targetDate: today(),
+      category: '休み',
+      details: '',
+      reporter: ''
+    };
+    try {
+      const draft = JSON.parse(localStorage.getItem(NOTE_DRAFT_KEY) || 'null');
+      if (draft && (draft.details || '').trim()) return {
+        form: {
+          ...blank,
+          ...draft
+        },
+        restored: true
+      };
+    } catch {}
+    return {
+      form: blank,
+      restored: false
+    };
   });
+  const restored = initial.restored;
+  const [f, setF] = useState(initial.form);
+  useEffect(() => {
+    if (init) return;
+    try {
+      if ((f.details || '').trim()) localStorage.setItem(NOTE_DRAFT_KEY, JSON.stringify(f));else localStorage.removeItem(NOTE_DRAFT_KEY);
+    } catch {}
+  }, [f]);
+  const clearDraft = () => {
+    if (init) return;
+    try {
+      localStorage.removeItem(NOTE_DRAFT_KEY);
+    } catch {}
+  };
+  const discardAndClose = () => {
+    clearDraft();
+    onClose();
+  };
+  const cancel = () => {
+    if (!init && (f.details || '').trim() && !window.confirm('書きかけの内容を破棄して閉じますか？')) return;
+    discardAndClose();
+  };
   const upd = k => v => setF(p => ({
     ...p,
     [k]: v
   }));
   return /*#__PURE__*/React.createElement(Modal, {
     title: init ? '連絡ノート編集' : '連絡ノート入力',
-    onClose: onClose
-  }, /*#__PURE__*/React.createElement("div", {
+    dirty: restored,
+    onClose: discardAndClose
+  }, restored && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--gold-d)',
+      background: 'var(--bg2)',
+      border: '1px solid var(--border)',
+      borderRadius: 8,
+      padding: '6px 10px',
+      marginBottom: 12
+    }
+  }, "前回の書きかけを復元しました（不要なら「キャンセル」で破棄できます）"), /*#__PURE__*/React.createElement("div", {
     className: "grid-2"
   }, /*#__PURE__*/React.createElement("div", {
     className: "form-group"
@@ -4477,7 +4548,7 @@ function NoteForm({
     }
   }, /*#__PURE__*/React.createElement("button", {
     className: "btn btn-ghost",
-    onClick: onClose
+    onClick: cancel
   }, "キャンセル"), /*#__PURE__*/React.createElement("button", {
     className: "btn btn-gold",
     onClick: () => {
@@ -4489,6 +4560,7 @@ function NoteForm({
         alert('内容詳細を入力してください。');
         return;
       }
+      clearDraft();
       onSave(f);
     }
   }, "保存してご利用予定変更記録を表示")));
