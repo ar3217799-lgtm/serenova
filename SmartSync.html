@@ -4925,18 +4925,46 @@ function DailyAttendance({
       alert('来所者を追加してください。');
       return;
     }
-    const newKarte = generateKarteRecords(data, date, validEntries);
-    const rec = {
-      date,
-      dayOfWeek: dow,
-      count: validEntries.length,
-      users: validEntries.map(e => e.userName).sort((a, b) => kanaFor(a).localeCompare(kanaFor(b), 'ja'))
-    };
-    setData(p => ({
-      ...p,
-      karteRecords: [...(p.karteRecords || []).filter(r => r.date !== date), ...newKarte],
-      visitRecords: [...p.visitRecords.filter(r => r.date !== date), rec].sort((a, b) => a.date.localeCompare(b.date))
-    }));
+    // カルテは保存の直前の最新データ(p)から作る。画面描画時点の data から
+    // 作ると、直前に他のPCで設定された振替などが反映されず、競合時の
+    // 再適用でも古い内容のまま保存されていた。
+    // また、その日のカルテが既にある人は作り直さず、カルテ画面で書いた
+    // コメントや手で直したリハ時間・レク有無を引き継ぐ（以前は「生成」を
+    // 押し直すたびに、誰かが書いたコメントが空に戻っていた）。
+    let newKarte = [];
+    setData(p => {
+      const att = p.dailyAttendance.find(a => a.date === date);
+      const entries = (att?.entries || []).filter(e => e.userName);
+      const existing = (p.karteRecords || []).filter(r => r.date === date);
+      newKarte = generateKarteRecords(p, date, entries).map(k => {
+        const old = existing.find(r => r.userName === k.userName);
+        if (!old) return k;
+        // 振替元が変わった場合はリハ時間を割り当て直す
+        const sameSubst = (old.substituteDay || null) === (k.substituteDay || null);
+        const rehabTime = sameSubst && old.rehabTime ? old.rehabTime : k.rehabTime;
+        const hasRec = old.hasRec ?? k.hasRec;
+        return {
+          ...k,
+          id: old.id,
+          rehabTime,
+          hasRec,
+          serviceContent: calcServiceContent(k.bath, k.rehabCategory, hasRec, rehabTime),
+          careComment: old.careComment || '',
+          rehabComment: old.rehabComment || ''
+        };
+      });
+      const rec = {
+        date,
+        dayOfWeek: dow,
+        count: entries.length,
+        users: entries.map(e => e.userName).sort((a, b) => kanaFor(a).localeCompare(kanaFor(b), 'ja'))
+      };
+      return {
+        ...p,
+        karteRecords: [...(p.karteRecords || []).filter(r => r.date !== date), ...newKarte],
+        visitRecords: [...p.visitRecords.filter(r => r.date !== date), rec].sort((a, b) => a.date.localeCompare(b.date))
+      };
+    });
     alert(`${fmtDate(date)} のカルテを生成しました（${newKarte.length}名）`);
   };
   const dateIssues = checkContradictions(data).filter(i => i.message.includes(fmtDate(date)) || i.detail?.includes(fmtDate(date)));
