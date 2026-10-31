@@ -1168,9 +1168,35 @@ let __unsentSince = null;
 const hasRawSync = () => typeof window.__smartsyncCall === 'function';
 const rawCall = (m, a) => window.__smartsyncCall(m, a || {});
 
+// このPC内の控え（localStorage）への書き込み。ブラウザの容量上限（約5MB）を
+// 超えると例外が出る。以前はこの例外で saveData 自体が止まり、サーバーへ
+// 送られないうえに保存中の件数(__pendingSaves)が戻らず、他のPCの変更の
+// 取り込みまで永久に止まっていた（＝入力が共有されず、再読込で消える）。
+// 控えは補助的なものなので、書けなければ古い控えを消して（古いまま残すと
+// 次回起動時に削除済みの記録が復活しうるため）サーバー保存を続ける。
+let __localCacheWarned = false;
+function writeLocalCache(json) {
+  try {
+    localStorage.setItem(STORE_KEY, json);
+  } catch (err) {
+    try { localStorage.removeItem(STORE_KEY); } catch {}
+    if (!__localCacheWarned) {
+      __localCacheWarned = true;
+      console.warn('local cache write failed:', err);
+      showToast('このPCの一時保存領域がいっぱいです。サーバーへの保存は続けます。', 'warn');
+    }
+  }
+}
+
 function saveData(d) {
-  const json = JSON.stringify(d);
-  localStorage.setItem(STORE_KEY, json);
+  let json;
+  try {
+    json = JSON.stringify(d);
+  } catch (err) {
+    console.error('stringify error:', err);
+    return Promise.resolve(false);
+  }
+  writeLocalCache(json);
   if (hasRawSync()) {
     // 版が不明なまま送らない。base_rev を省くとサーバーが競合判定を
     // スキップして無条件上書きになるため、必ず取得し直してから保存する
@@ -7090,7 +7116,10 @@ function App() {
     const next = typeof fn === 'function' ? fn(dataRef.current) : fn;
     commitData(next);
     __pendingSaves++;
-    saveData(next).then(ok => {
+    // saveData が想定外の例外を投げても __pendingSaves が戻らないまま
+    // （＝他PCの変更の取り込みが永久に止まる）にならないよう、必ず
+    // Promise の流れに乗せて失敗扱い→再試行にする。
+    Promise.resolve().then(() => saveData(next)).catch(() => false).then(ok => {
       if (ok === false) retrySave(fn);
       else __pendingSaves--;
     });
