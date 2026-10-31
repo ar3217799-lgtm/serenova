@@ -1,0 +1,26 @@
+name: Diag double start (Windows)
+
+on:
+  push:
+    branches:
+      - 'diag/**'
+
+jobs:
+  diag:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: before (launch.py now in use)
+        run: |
+          pip install rsa
+          mkdir before_src
+          copy windows\licensing.py before_src\licensing.py
+          copy diag\launch_before.py before_src\launch.py
+          python -u diag/diag_double_start.py before_src before
+      - name: after (launch.py on this branch)
+        run: |
+          python -u diag/diag_double_start.py windows after
