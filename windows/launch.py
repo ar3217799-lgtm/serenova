@@ -100,30 +100,45 @@ MAX_DEVICES = LICENSE['maxDevices']
 _lock = threading.Lock()
 _rev = 0            # データの版番号。保存のたびに増える
 _data_str = None    # 現在のデータ本体（JSON文字列）
+# data.json が存在するのに読めなかった。この状態で保存を受け付けると、空の
+# データ（または1台のPCの控え）で data.json を上書きしてしまうため、保存を拒否する。
+_load_failed = None
 HOST_IP = None       # このPC自身のLAN上のIP（起動時に確定）
 
 
 def _load_from_disk():
-    """data.json を読む。旧形式（rev なし）も受け付けて移行する。"""
-    global _rev, _data_str
+    """data.json を読む。旧形式（rev なし）も受け付けて移行する。
+
+    PCの起動直後はウイルス対策ソフトや同期ソフトが一時的にファイルを掴んでいて
+    読めないことがあるため、何度か待って読み直す。それでも読めない場合は
+    以前のように「データ無し」で動き出さない（最初の保存で data.json が
+    空や1台分のデータで上書きされ、全員の入力が消えるため）。保存を拒否する。"""
+    global _rev, _data_str, _load_failed
     if not os.path.exists(DATA_PATH):
         _rev, _data_str = 0, None
         return
-    try:
-        with open(DATA_PATH, 'r', encoding='utf-8') as f:
-            raw = f.read()
-        obj = json.loads(raw)
-        if isinstance(obj, dict) and 'rev' in obj and 'data' in obj:
-            _rev = int(obj['rev'])
-            _data_str = json.dumps(obj['data'], ensure_ascii=False)
-        else:
-            # 旧形式：中身をそのままデータとして扱う
-            _rev = 1
-            _data_str = raw
-            log('data.json を新形式へ移行しました')
-    except Exception as e:
-        log(f'data.json 読込エラー: {e}')
-        _rev, _data_str = 0, None
+    last_err = None
+    for _ in range(20):
+        try:
+            with open(DATA_PATH, 'r', encoding='utf-8') as f:
+                raw = f.read()
+            obj = json.loads(raw)
+            if isinstance(obj, dict) and 'rev' in obj and 'data' in obj:
+                _rev = int(obj['rev'])
+                _data_str = json.dumps(obj['data'], ensure_ascii=False)
+            else:
+                # 旧形式：中身をそのままデータとして扱う
+                _rev = 1
+                _data_str = raw
+                log('data.json を新形式へ移行しました')
+            _load_failed = None
+            return
+        except Exception as e:
+            last_err = e
+            time.sleep(0.5)
+    _load_failed = str(last_err)
+    log(f'data.json 読込エラー（保存を停止します）: {last_err}')
+    _rev, _data_str = 0, None
 
 
 def _write_to_disk():
@@ -134,7 +149,16 @@ def _write_to_disk():
         json.dump(payload, f, ensure_ascii=False)
         f.flush()
         os.fsync(f.fileno())
-    os.replace(tmp, DATA_PATH)
+    # Windows ではウイルス対策ソフト等が data.json を一瞬掴んでいると置き換えに
+    # 失敗する（PermissionError）。少し待って何度か試す。
+    for i in range(20):
+        try:
+            os.replace(tmp, DATA_PATH)
+            return
+        except PermissionError:
+            if i == 19:
+                raise
+            time.sleep(0.1)
 
 
 def _daily_backup():
@@ -158,20 +182,54 @@ def _daily_backup():
 
 
 # ── 端末登録 ────────────────────────────────────────────────────────────
-def _read_devices():
-    try:
-        with open(DEVICES_PATH, 'r', encoding='utf-8') as f:
-            d = json.load(f)
-            return d if isinstance(d, dict) else {}
-    except Exception:
+# 端末一覧はメモリに持つ。以前はリクエストのたびに devices.json を読み直して
+# いたため、別のリクエストが書き換えている瞬間（Windowsでは置き換え中のファイル
+# が読めないことがある）に「端末なし」と誤読し、登録済みのPCが弾かれたり、
+# 端末登録の書き込みで他のPCの登録を消してしまうことがあった。
+_devices_cache = None
+
+
+def _load_devices_file():
+    if not os.path.exists(DEVICES_PATH):
         return {}
+    last_err = None
+    for _ in range(20):
+        try:
+            with open(DEVICES_PATH, 'r', encoding='utf-8') as f:
+                d = json.load(f)
+            return d if isinstance(d, dict) else {}
+        except Exception as e:
+            last_err = e
+            time.sleep(0.1)
+    log(f'devices.json 読込エラー: {last_err}')
+    return {}
+
+
+def _read_devices():
+    global _devices_cache
+    if _devices_cache is None:
+        _devices_cache = _load_devices_file()
+    return dict(_devices_cache)
 
 
 def _write_devices(d):
+    global _devices_cache
+    _devices_cache = dict(d)
     tmp = DEVICES_PATH + '.tmp'
-    with open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(d, f, ensure_ascii=False, indent=1)
-    os.replace(tmp, DEVICES_PATH)
+    try:
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(d, f, ensure_ascii=False, indent=1)
+        for i in range(20):
+            try:
+                os.replace(tmp, DEVICES_PATH)
+                break
+            except PermissionError:
+                if i == 19:
+                    raise
+                time.sleep(0.1)
+    except Exception as e:
+        # 書けなくても、メモリ上の一覧で動作は続ける
+        log(f'devices.json 書込エラー: {e}')
 
 
 def is_host_ip(ip):
@@ -218,11 +276,13 @@ def register_device(device_id, name, remote_ip, pair_code):
 def device_allowed(device_id):
     if not device_id:
         return False
-    return device_id in _read_devices()
+    with _lock:
+        return device_id in _read_devices()
 
 
 def list_devices():
-    devs = _read_devices()
+    with _lock:
+        devs = _read_devices()
     return {'limit': MAX_DEVICES, 'used': len(devs),
             'devices': [dict(id=k, **v) for k, v in devs.items()]}
 
@@ -275,6 +335,8 @@ def api_save_data(json_str, base_rev):
     """版番号が食い違う保存は拒否し、最新データを返す（上書き消失を防ぐ）。"""
     global _rev, _data_str
     with _lock:
+        if _load_failed:
+            return {'ok': False, 'reason': f'data_load_failed: {_load_failed}'}
         if _data_str is not None and base_rev is not None and int(base_rev) != _rev:
             return {'ok': False, 'conflict': True, 'rev': _rev, 'json': _data_str}
         try:
@@ -282,13 +344,18 @@ def api_save_data(json_str, base_rev):
         except Exception as e:
             return {'ok': False, 'reason': f'invalid_json: {e}'}
         _daily_backup()
+        prev_rev, prev_str = _rev, _data_str
         _data_str = json_str
         _rev += 1
         try:
             _write_to_disk()
         except Exception as e:
+            # ディスクに書けなかったのにメモリだけ進めると、他のPCには見えるのに
+            # 親機の再起動で消える状態になる。メモリも元に戻して「失敗」を返す
+            # （画面側は入力を手元に残して送り直す）。
+            _rev, _data_str = prev_rev, prev_str
             log(f'保存エラー: {e}')
-            return {'ok': False, 'reason': str(e)}
+            return {'ok': False, 'reason': f'write_failed: {e}'}
         return {'ok': True, 'rev': _rev}
 
 
@@ -593,9 +660,53 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
-    """複数PCからの同時接続をさばくため、リクエストごとにスレッドで処理する。"""
+    """複数PCからの同時接続をさばくため、リクエストごとにスレッドで処理する。
+
+    Windows では SO_REUSEADDR を付けると、既に別の SmartSync が使っている
+    ポートにもう1つ割り込んで待ち受けできてしまう（Linux/Mac とは意味が違う）。
+    以前はこれで親機の SmartSync.exe を2回起動すると親機サーバーが2つ動き、
+    それぞれが別々のデータを持って data.json を上書きし合っていた（入力が
+    他のPCに共有されない・再起動すると消える）。Windows では使わず、
+    逆に SO_EXCLUSIVEADDRUSE で他のプロセスと同じポートを共有しない。"""
     daemon_threads = True
-    allow_reuse_address = True
+    allow_reuse_address = (os.name != 'nt')
+
+    def server_bind(self):
+        if os.name == 'nt' and hasattr(socket, 'SO_EXCLUSIVEADDRUSE'):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
+_instance_mutex = None
+
+
+def _another_instance_running():
+    """このPCで SmartSync（同じポート）が既に動いていれば True（Windowsのみ判定）。"""
+    global _instance_mutex
+    if os.name != 'nt':
+        return False
+    try:
+        import ctypes
+        k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        k32.CreateMutexW.restype = ctypes.c_void_p
+        h = k32.CreateMutexW(None, False, f'Local\\SmartSync_Server_{SERVER_PORT}')
+        err = ctypes.get_last_error()
+        if not h:
+            return False
+        _instance_mutex = h      # プロセスが終わるまで保持する
+        return err == 183        # ERROR_ALREADY_EXISTS
+    except Exception:
+        return False
+
+
+def _smartsync_answering():
+    """このPCの SmartSync がポートで応答しているか。"""
+    try:
+        import urllib.request
+        with urllib.request.urlopen(f'http://127.0.0.1:{SERVER_PORT}/', timeout=3) as r:
+            return b'__smartsyncCall' in r.read()
+    except Exception:
+        return False
 
 
 def local_ip():
@@ -624,8 +735,14 @@ def open_edge_app(url):
 
 def main():
     global HOST_IP
-    log('=== Smart Sync 起動 ===')
+    log(f'=== Smart Sync 起動 === (pid {os.getpid()})')
     log(f'APP_DIR: {APP_DIR}')
+    # 既に SmartSync が動いている（画面だけ閉じた後にもう一度ダブルクリックした等）
+    # 場合は、親機サーバーを2つ目として起動せず、動いている方の画面を開くだけにする。
+    if _another_instance_running():
+        log('既に起動しています。画面だけを開きます。')
+        open_edge_app(f'http://localhost:{SERVER_PORT}/')
+        sys.exit(0)
     if not os.path.exists(HTML_PATH):
         try:
             import ctypes
@@ -652,6 +769,11 @@ def main():
     try:
         server = ThreadedHTTPServer(('0.0.0.0', SERVER_PORT), Handler)
     except OSError as e:
+        if _smartsync_answering():
+            # 古い版の SmartSync が動いている等で、ポートは既に SmartSync が使っている
+            log('既に SmartSync が応答しています。画面だけを開きます。')
+            open_edge_app(f'http://localhost:{SERVER_PORT}/')
+            sys.exit(0)
         msg = (f'ポート {SERVER_PORT} を使用できません。\n'
                f'Smart Sync が既に起動していないか確認してください。\n\n{e}')
         log(msg)
@@ -664,6 +786,17 @@ def main():
 
     threading.Thread(target=server.serve_forever, daemon=True).start()
     log(f'親機として起動しました: http://{HOST_IP}:{SERVER_PORT}/')
+    if _load_failed:
+        def _warn_load_failed():
+            try:
+                import ctypes
+                ctypes.windll.user32.MessageBoxW(
+                    0, 'data.json を読み込めませんでした。データを守るため、保存を止めています。\n'
+                       'パソコンを再起動してから、もう一度 Smart Sync を起動してください。\n\n'
+                       f'{_load_failed}', 'Smart Sync — エラー', 0x30)
+            except Exception:
+                pass
+        threading.Thread(target=_warn_load_failed, daemon=True).start()
     log('子機からは上記URLをブラウザで開いてください')
 
     time.sleep(0.8)
