@@ -1,10 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
 # PyWebView 不使用 — 標準ライブラリ + rsa（ライセンス検証）のみ、--onefile ビルド
 a = Analysis(
     ['launch.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    # 画面ファイルを同梱（exe の隣に SmartSync.html が無い場合の予備）
+    datas=[(os.path.join(SPECPATH, '..', 'SmartSync.html'), '.')],
     hiddenimports=['licensing', 'rsa', 'rsa.pkcs1', 'rsa.key', 'rsa.core',
                    'rsa.common', 'rsa.transform', 'rsa.randnum', 'pyasn1',
                    'pyasn1.codec.der.decoder', 'pyasn1.codec.der.encoder'],

@@ -27,25 +27,9 @@ jobs:
         run: |
           pyinstaller SmartSync.spec --clean
 
-      - name: Smoke test (built exe, double start)
+      - name: Smoke test (built exe)
         shell: pwsh
-        run: |
-          $d = New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\smoke"
-          Copy-Item windows\dist\SmartSync.exe "$d\SmartSync.exe"
-          Copy-Item SmartSync.html "$d\SmartSync.html"
-          $p1 = Start-Process -FilePath "$d\SmartSync.exe" -WorkingDirectory $d -PassThru
-          Start-Sleep -Seconds 10
-          $r = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8765/
-          if ($r.Content -notmatch '__smartsyncCall') { throw 'server not answering' }
-          $p2 = Start-Process -FilePath "$d\SmartSync.exe" -WorkingDirectory $d -PassThru
-          Start-Sleep -Seconds 10
-          $log = Get-Content "$d\smartsync.log" -Raw -Encoding UTF8
-          Write-Host $log
-          $ok = $p2.HasExited -and (-not $p1.HasExited) -and ($log -match '既に起動しています')
-          Get-Process SmartSync -ErrorAction SilentlyContinue | Stop-Process -Force
-          Get-Process msedge -ErrorAction SilentlyContinue | Stop-Process -Force
-          if (-not $ok) { throw "double start not prevented (p2 exited: $($p2.HasExited), p1 exited: $($p1.HasExited))" }
-          Write-Host "::notice title=smoke::2回目の起動は画面を開いて終了し、親機サーバーは1つだけ動いていることを確認"
+        run: ./windows/smoke_test.ps1
 
       - name: Assemble dist_package
         run: |

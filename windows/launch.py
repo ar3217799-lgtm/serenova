@@ -26,10 +26,113 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 from urllib.parse import urlparse
 
-if getattr(sys, 'frozen', False):
-    APP_DIR = os.path.dirname(sys.executable)
-else:
-    APP_DIR = os.path.dirname(os.path.abspath(__file__))
+# ── どのフォルダのデータで動くかを決める ─────────────────────────────────
+# SmartSync.exe は、いつも使っているフォルダ（data.json・license.key がある所）で
+# 動かす必要がある。exe だけをデスクトップ等に置いて起動すると、以前は
+# 「SmartSync.html が見つかりません」で止まり、HTML を置けば今度は空のデータで
+# 動き出して入力が本来のデータと分かれてしまっていた。データの無い場所で
+# 起動された場合は、このPCの中からいつものフォルダを探し、確認してから
+# そのデータで起動する（そのフォルダの古い exe もこの exe に置き換える）。
+def _msgbox(text, title, flags):
+    # 自動テスト用：確認ダイアログに「はい」と答えたことにする
+    if os.environ.get('SMARTSYNC_TEST_AUTOYES') == '1':
+        print('MSGBOX ' + title + ': ' + text.replace('\n', ' '), flush=True)
+        return 6
+    try:
+        import ctypes
+        return ctypes.windll.user32.MessageBoxW(0, text, title, flags)
+    except Exception:
+        return 0
+
+
+def _looks_like_smartsync_data(path):
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            obj = json.load(f)
+        d = obj.get('data') if isinstance(obj, dict) and 'data' in obj else obj
+        return isinstance(d, dict) and any(k in d for k in ('users', 'contactNotes', 'dayMasters'))
+    except Exception:
+        return False
+
+
+_SKIP_DIRS = {'appdata', 'windows', 'program files', 'program files (x86)', 'programdata',
+              '$recycle.bin', 'system volume information', 'recovery', 'perflogs',
+              'node_modules', '__pycache__', 'smartsyncバックアップ'}
+
+
+def _find_existing_installs(exclude):
+    """このPCの中から、SmartSync のデータがあるフォルダを探す（新しい順）。"""
+    home = os.path.expanduser('~')
+    roots = [(home, 5)] + [(f'{d}:\\', 3) for d in 'CDEFG' if os.path.isdir(f'{d}:\\')]
+    ex = os.path.normcase(os.path.abspath(exclude))
+    home_n = os.path.normcase(os.path.abspath(home))
+    seen, found = set(), []
+    t0 = time.time()
+    for root, maxdepth in roots:
+        for dirpath, dirnames, filenames in os.walk(root):
+            if time.time() - t0 > 30:
+                break
+            rel = os.path.relpath(dirpath, root)
+            depth = 0 if rel == '.' else rel.count(os.sep) + 1
+            if depth >= maxdepth:
+                dirnames[:] = []
+            else:
+                dirnames[:] = [d for d in dirnames
+                               if d.lower() not in _SKIP_DIRS and not d.startswith('.')
+                               and os.path.normcase(os.path.join(dirpath, d)) != home_n]
+            if 'data.json' not in filenames:
+                continue
+            if not any(x in filenames for x in ('license.key', 'config.json', 'SmartSync.exe', 'SmartSync.html')):
+                continue
+            n = os.path.normcase(os.path.abspath(dirpath))
+            if n == ex or n in seen:
+                continue
+            seen.add(n)
+            if _looks_like_smartsync_data(os.path.join(dirpath, 'data.json')):
+                found.append(dirpath)
+    found.sort(key=lambda d: os.path.getmtime(os.path.join(d, 'data.json')), reverse=True)
+    return found
+
+
+def _resolve_app_dir(here):
+    if not getattr(sys, 'frozen', False) and os.environ.get('SMARTSYNC_FORCE_RESOLVE') != '1':
+        return here
+    if os.path.exists(os.path.join(here, 'data.json')) or os.path.exists(os.path.join(here, 'license.key')):
+        return here
+    found = _find_existing_installs(here)
+    if found:
+        target = found[0]
+        r = _msgbox('この場所には SmartSync のデータがありません。\n'
+                    f'{here}\n\n'
+                    'いつも使っているデータが見つかりました。\n'
+                    f'{target}\n\n'
+                    'こちらのデータで起動しますか？（通常は「はい」を押してください）',
+                    'Smart Sync', 0x24)          # はい／いいえ・？アイコン
+        if r != 6:
+            sys.exit(0)
+        if getattr(sys, 'frozen', False):
+            # いつものフォルダの古い exe をこの exe に置き換える（次回からはいつもの
+            # ショートカットでも新しい版が動く）。古い exe が動いていて置き換えられない
+            # 場合はそのまま続ける（後のポート確認で、動いている方の画面を開く）。
+            dest = os.path.join(target, 'SmartSync.exe')
+            try:
+                if os.path.normcase(os.path.abspath(dest)) != os.path.normcase(os.path.abspath(sys.executable)):
+                    shutil.copy2(sys.executable, dest)
+            except Exception:
+                pass
+        return target
+    r = _msgbox('SmartSync のデータ（data.json）がこのパソコンに見つかりません。\n\n'
+                '新しく使い始める場合は「はい」を押してください。\n\n'
+                '既に使っている場合は「いいえ」を押し、この SmartSync.exe を、いつものフォルダ\n'
+                '（data.json と license.key が入っているフォルダ）に置いてから起動してください。',
+                'Smart Sync', 0x34)              # はい／いいえ・！アイコン
+    if r != 6:
+        sys.exit(0)
+    return here
+
+
+_HERE = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+APP_DIR = _resolve_app_dir(_HERE)
 sys.path.insert(0, APP_DIR if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__)))
 
 import licensing  # noqa: E402  (公開鍵のみを含む検証モジュール)
@@ -744,6 +847,15 @@ def main():
     global HOST_IP
     log(f'=== Smart Sync 起動 === (pid {os.getpid()})')
     log(f'APP_DIR: {APP_DIR}')
+    if not os.path.exists(HTML_PATH):
+        # 画面のファイルが無い → exe に同梱した版を置く（以後は更新バナーで最新になる）
+        bundled = os.path.join(getattr(sys, '_MEIPASS', ''), 'SmartSync.html')
+        if getattr(sys, '_MEIPASS', None) and os.path.exists(bundled):
+            try:
+                shutil.copy2(bundled, HTML_PATH)
+                log('SmartSync.html が無かったため、同梱の画面ファイルを置きました')
+            except Exception as e:
+                log(f'同梱の画面ファイルを置けませんでした: {e}')
     # 既に SmartSync が動いている（画面だけ閉じた後にもう一度ダブルクリックした等）
     # 場合は、親機サーバーを2つ目として起動せず、動いている方の画面を開くだけにする。
     if _another_instance_running():
