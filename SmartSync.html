@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.18.0';
+const APP_VERSION = '2.18.1';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -928,6 +928,8 @@ async function downloadUpdate(info, setProgress) {
 const DAYS = ['月', '火', '水', '金', '土'];
 const BATH_METHODS = ['大浴場', '特殊浴', '個室浴', 'シャワー浴'];
 const REHAB_CATS = ['①座位・立位訓練・ADL・IADL訓練', '②立位・起立・移動・ADL・IADL訓練', '③移動訓練・ADL・IADL訓練', '④認知機能・ADL・IADL訓練', '⑤趣味・社会参加訓練'];
+// 連絡ノート「誰から」の選択肢（これ以外は「その他（自由記入）」で入力）
+const CONTACT_FROMS = ['本人', '家族', 'ヘルパー', 'ケアマネ'];
 const CONTACT_CATS = ['休み', '振替', '時間短縮', '送迎減算', '入浴', 'リハ', 'その他'];
 const TEMPLATES = ['お休みのご連絡をいただきました。', 'ご体調不良のためお休みとのご連絡をいただきました。', '発熱のためお休みとのご連絡をいただきました。', '受診のためお休みとのご連絡をいただきました。', '入院のためお休みとのご連絡をいただきました。', '家族のご都合によりお休みとのご連絡をいただきました。', '振替希望のご連絡をいただきました。', '時間短縮のご連絡をいただきました。', '送迎不要のご連絡をいただきました。', '本人希望により入浴非実施', '本人希望によりリハ非実施', '退院されました。', 'その他（詳細は備考欄参照）'];
 const TIME_SLOTS = ['10:00〜10:15', '10:15〜10:30', '10:30〜10:45', '10:45〜11:00', '11:00〜11:15', '11:15〜11:30', '11:30〜11:45', '11:45〜12:00'];
@@ -4679,6 +4681,51 @@ function UserManagement({
   }));
 }
 
+/* 連絡ノート「誰から」：プルダウンで選ぶか、「その他」を選んで自由に記入する。
+   以前に自由記入した値（「ご家族」等）を編集する時は「その他」＋その文字で表示する。 */
+function ContactFromField({
+  value,
+  onChange
+}) {
+  const v = value || '';
+  const [other, setOther] = useState(() => v !== '' && !CONTACT_FROMS.includes(v));
+  const OTHER = '__other__';
+  const selectValue = other ? OTHER : CONTACT_FROMS.includes(v) ? v : '';
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("select", {
+    className: "form-select",
+    value: selectValue,
+    onChange: e => {
+      const x = e.target.value;
+      if (x === OTHER) {
+        setOther(true);
+        onChange('');
+      } else {
+        setOther(false);
+        onChange(x);
+      }
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "選択してください"), CONTACT_FROMS.map(c => /*#__PURE__*/React.createElement("option", {
+    key: c,
+    value: c
+  }, c)), /*#__PURE__*/React.createElement("option", {
+    value: OTHER
+  }, "その他（自由記入）")), other && /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    value: v,
+    autoFocus: !v,
+    onChange: e => onChange(e.target.value),
+    placeholder: "例：デイサービス相談員、病院 など"
+  }));
+}
+
 /* ══ NoteForm（ContactNotes外に定義 → 毎レンダリングで別コンポーネントになる問題を防ぐ） ══ */
 function NoteForm({
   users,
@@ -4797,11 +4844,9 @@ function NoteForm({
     className: "form-group"
   }, /*#__PURE__*/React.createElement("label", {
     className: "form-label"
-  }, "誰から"), /*#__PURE__*/React.createElement("input", {
-    className: "form-input",
+  }, "誰から"), /*#__PURE__*/React.createElement(ContactFromField, {
     value: f.contactFrom,
-    onChange: e => upd('contactFrom')(e.target.value),
-    placeholder: "ご本人 / ご家族など"
+    onChange: upd('contactFrom')
   })), /*#__PURE__*/React.createElement("div", {
     className: "form-group"
   }, /*#__PURE__*/React.createElement("label", {
