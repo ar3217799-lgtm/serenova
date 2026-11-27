@@ -777,7 +777,7 @@ const {
 
 /* ══ アップデート設定 ════════════════════════════════════════════════════════ */
 // ↓↓↓ デプロイ時にバージョンを更新し、GitHub Pages の URL を設定してください ↓↓↓
-const APP_VERSION = '2.18.1';
+const APP_VERSION = '2.19.0';
 const UPDATE_CHECK_URL = 'https://ar3217799-lgtm.github.io/serenova/version.json';
 const UPDATE_ORIGIN = 'https://ar3217799-lgtm.github.io';
 // ↑↑↑ 設定箇所ここまで ↑↑↑
@@ -1200,7 +1200,10 @@ let __baseRev = null;
 // 送られないうえに他のPCの変更の取り込みまで永久に止まっていた。
 // 控えは起動直後の表示用の補助なので、書けなければ古い控えを消して続ける。
 let __localCacheWarned = false;
+// 未送信の入力の記録（変更ログ）を書く場所を空けるため、控えを止めた
+let __localCacheDisabled = false;
 function writeLocalCache(json) {
+  if (__localCacheDisabled) return;
   try {
     localStorage.setItem(STORE_KEY, json);
   } catch (err) {
@@ -1421,18 +1424,38 @@ function adoptOrphanLogs(store, force) {
   if (adoptOrphanLogs(store, false)) saveSyncLog(store);
 })();
 // store を渡した場合はそれ（引き継いだ区画を削除済みのもの）に書き込む
+// 未送信の入力をこのPCに書けなかった（ブラウザの保存領域が一杯など）。
+// この状態で画面を閉じると、親機に届いていない入力が失われるため画面に警告を出す。
+let __syncLogUnsafe = false;
 function saveSyncLog(storeArg) {
+  const store = storeArg || readSyncStore() || { v: 2, tabs: {} };
+  if (__syncLog.length) store.tabs[SYNC_TAB_ID] = { hb: Date.now(), log: __syncLog };
+  else delete store.tabs[SYNC_TAB_ID];
+  const json = JSON.stringify(store);
   try {
-    const store = storeArg || readSyncStore() || { v: 2, tabs: {} };
-    if (__syncLog.length) store.tabs[SYNC_TAB_ID] = { hb: Date.now(), log: __syncLog };
-    else delete store.tabs[SYNC_TAB_ID];
-    localStorage.setItem(SYNC_LOG_KEY, JSON.stringify(store));
+    localStorage.setItem(SYNC_LOG_KEY, json);
+    __syncLogUnsafe = false;
+    return;
   } catch (err) {
-    // 書けなくても、この画面を開いている間はメモリ上のログで送り直せる
     if (!__syncLogWarned) {
       __syncLogWarned = true;
       console.warn('unsent log write failed:', err);
     }
+  }
+  // 未送信の入力の記録は何より優先する。送信済みの控えと、データ全体の控えを
+  // 消して場所を空け、もう一度書く（控えは無くても親機から取り直せる）。
+  try {
+    localStorage.removeItem('serenova_sent_journal');
+  } catch {}
+  try {
+    localStorage.removeItem(STORE_KEY);
+  } catch {}
+  __localCacheDisabled = true;
+  try {
+    localStorage.setItem(SYNC_LOG_KEY, json);
+    __syncLogUnsafe = false;
+  } catch {
+    __syncLogUnsafe = true;
   }
 }
 // 定期的に呼ぶ：生存の印を更新し、閉じられた画面のログを引き継ぐ
@@ -1509,9 +1532,14 @@ let __sentJournal = (() => {
 function saveSentJournal() {
   const now = Date.now();
   __sentJournal = __sentJournal.filter(e => now - (e.t || 0) < SYNC_SENT_KEEP_MS).slice(-1500);
+  if (__localCacheDisabled) return;
   try {
     localStorage.setItem(SYNC_SENT_KEY, JSON.stringify(__sentJournal));
-  } catch {}
+  } catch {
+    try {
+      localStorage.removeItem(SYNC_SENT_KEY);
+    } catch {}
+  }
 }
 function recordSent(entries, rev) {
   if (!entries.length) return;
@@ -4681,6 +4709,144 @@ function UserManagement({
   }));
 }
 
+/* 消えた記録の復元：親機の保管庫（history_records.jsonl）にある、削除された・
+   書き換えられる前の連絡ノートとカルテを一覧し、選んだものを元に戻す。 */
+function RestoreHistoryModal({
+  data,
+  setData,
+  onClose
+}) {
+  const [items, setItems] = useState(null);
+  const [err, setErr] = useState('');
+  const [coll, setColl] = useState('contactNotes');
+  const [q, setQ] = useState('');
+  useEffect(() => {
+    if (!hasRawSync()) {
+      setErr('親機に接続していないため使えません。');
+      return;
+    }
+    rawCall('list_history', {}, 15000).then(r => {
+      if (r && r.ok) setItems(r.items || []);else setErr('親機の SmartSync.exe を最新版に更新すると使えます。');
+    }).catch(() => setErr('親機の SmartSync.exe を最新版に更新すると使えます（または親機と通信できません）。'));
+  }, []);
+  const current = new Map((data[coll] || []).map(r => [r.id, r]));
+  const list = (items || []).filter(it => it.coll === coll && it.record && it.record.id).filter(it => {
+    if (!q.trim()) return true;
+    const r = it.record;
+    return [r.userName, r.details, r.careComment, r.rehabComment, r.targetDate, r.date].some(x => (x || '').includes(q.trim()));
+  });
+  const restore = it => {
+    const r = it.record;
+    const cur = current.get(r.id);
+    if (it.kind === 'deleted' && cur) {
+      alert('この記録は既に戻っています（現在のデータにあります）。');
+      return;
+    }
+    if (cur && !window.confirm('現在の内容を、この「以前の内容」に置き換えます。よろしいですか？')) return;
+    setData(p => {
+      const arr = p[coll] || [];
+      return {
+        ...p,
+        [coll]: arr.some(x => x.id === r.id) ? arr.map(x => x.id === r.id ? r : x) : [...arr, r]
+      };
+    });
+    showToast('記録を元に戻しました', 'ok');
+  };
+  const summary = r => coll === 'contactNotes' ? `${fmtDate(r.targetDate)}　${r.category || ''}　${r.contactFrom ? r.contactFrom + 'より　' : ''}${r.details || ''}` : `${fmtDate(r.date)}　介護: ${r.careComment || '（なし）'}　リハ: ${r.rehabComment || '（なし）'}`;
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: "🗂 消えた記録の復元",
+    wide: true,
+    onClose: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--text2)',
+      marginBottom: 10,
+      lineHeight: 1.7
+    }
+  }, "どのPCで消した・書き換えた場合でも、親機に変わる前の内容が残っています。戻したい記録の「元に戻す」を押してください。"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      marginBottom: 10,
+      flexWrap: 'wrap'
+    }
+  }, /*#__PURE__*/React.createElement("select", {
+    className: "form-select",
+    style: {
+      width: 160
+    },
+    value: coll,
+    onChange: e => setColl(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "contactNotes"
+  }, "連絡ノート"), /*#__PURE__*/React.createElement("option", {
+    value: "karteRecords"
+  }, "カルテ")), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    style: {
+      flex: 1,
+      minWidth: 160
+    },
+    value: q,
+    onChange: e => setQ(e.target.value),
+    placeholder: "利用者名・内容・日付で絞り込み"
+  })), err ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: 'var(--err)',
+      fontSize: 13
+    }
+  }, err) : items === null ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13
+    }
+  }, "読み込み中…") : list.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: 'var(--text3)'
+    }
+  }, "消えた・書き換えられた記録はありません。") : /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 6,
+      maxHeight: 420,
+      overflowY: 'auto'
+    }
+  }, list.map((it, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    className: "restore-item",
+    style: {
+      display: 'flex',
+      gap: 10,
+      alignItems: 'center',
+      padding: '8px 10px',
+      border: '1px solid var(--border)',
+      borderRadius: 8,
+      background: 'var(--bg2)'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      fontSize: 12,
+      lineHeight: 1.6
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: `badge ${it.kind === 'deleted' ? 'badge-warn' : 'badge-info'}`,
+    style: {
+      marginRight: 6
+    }
+  }, it.kind === 'deleted' ? '削除された' : '書き換え前'), /*#__PURE__*/React.createElement("b", null, it.record.userName), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--text3)',
+      marginLeft: 8
+    }
+  }, (it.t || '').replace('T', ' '), "\u3000", it.deviceName || ''), /*#__PURE__*/React.createElement("div", null, summary(it.record))), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost btn-sm",
+    onClick: () => restore(it)
+  }, "元に戻す")))));
+}
+
 /* 連絡ノート「誰から」：プルダウンで選ぶか、「その他」を選んで自由に記入する。
    以前に自由記入した値（「ご家族」等）を編集する時は「その他」＋その文字で表示する。 */
 function ContactFromField({
@@ -5065,6 +5231,7 @@ function ContactNotes({
   const [fCat, setFCat] = useState('');
   const [fMonth, setFMonth] = useState('');
   const [reportUser, setReport] = useState(null);
+  const [showRestore, setShowRestore] = useState(false);
   const saveNote = f => {
     if (editNote) {
       setData(p => ({
@@ -5153,12 +5320,20 @@ function ContactNotes({
       flex: 1
     }
   }), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-ghost btn-sm",
+    onClick: () => setShowRestore(true),
+    title: "親機の保管庫から、消えた・書き換えられた連絡ノートやカルテを元に戻します"
+  }, "🗂 消えた記録の復元"), /*#__PURE__*/React.createElement("button", {
     className: "btn btn-gold",
     onClick: () => {
       setEditNote(null);
       setShowForm(true);
     }
-  }, "＋ 新規入力")), /*#__PURE__*/React.createElement("div", {
+  }, "＋ 新規入力")), showRestore && /*#__PURE__*/React.createElement(RestoreHistoryModal, {
+    data: data,
+    setData: setData,
+    onClose: () => setShowRestore(false)
+  }), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: 8,
@@ -5245,10 +5420,15 @@ function ContactNotes({
       }
     }, "編集"), /*#__PURE__*/React.createElement("button", {
       className: "btn btn-danger btn-sm",
-      onClick: () => setData(p => ({
-        ...p,
-        contactNotes: p.contactNotes.filter(x => x.id !== n.id)
-      }))
+      onClick: () => {
+        // 「編集」の隣にあり押し間違えやすいため、必ず確認してから削除する
+        // （以前は1回押すだけで確認なしに消えていた）
+        if (!window.confirm(`この連絡ノートを削除しますか？\n\n${n.userName} さん（${fmtDate(n.targetDate)}）${n.category || ''}\n${(n.details || '').slice(0, 60)}\n\n※ 間違えて削除した場合は「🗂 消えた記録の復元」から戻せます。`)) return;
+        setData(p => ({
+          ...p,
+          contactNotes: p.contactNotes.filter(x => x.id !== n.id)
+        }));
+      }
     }, "削除"))));
   }))))), reportUser && /*#__PURE__*/React.createElement(ChangeRecordModal, {
     userName: reportUser,
@@ -7749,7 +7929,7 @@ function App() {
         const cand = composeWithLog(__serverBase.data);
         let r = null;
         try {
-          r = await rawCall('save_data', { json_str: JSON.stringify(cand), base_rev: __serverBase.rev });
+          r = await rawCall('save_data', { json_str: JSON.stringify(cand), base_rev: __serverBase.rev, client_version: APP_VERSION });
         } catch {}
         if (r && r.ok) {
           __serverBase = { rev: r.rev, data: cand };
@@ -7929,6 +8109,54 @@ function App() {
       runSync();
       refreshUnsent();
     });
+  }, []);
+
+  // 親機の本体（SmartSync.exe）の版と、画面の版を定期的に確かめる。
+  // ・親機の exe が古い（二重起動でデータが消える不具合のある版）なら、画面上部に
+  //   更新を促す表示を出し続ける
+  // ・親機にこの画面より新しい版が置かれていたら（他のPCが更新済み）、入力中で
+  //   なければ自動で読み込み直し、全PCが同じ版の画面で動くようにする
+  const [serverWarn, setServerWarn] = useState('');
+  useEffect(() => {
+    if (!hasRawSync()) return;
+    let stopped = false;
+    const check = async () => {
+      if (stopped) return;
+      let info = null;
+      let reachable = false;
+      try {
+        const r = await rawCall('get_rev', {}, 8000);
+        reachable = !!(r && r.rev !== undefined);
+      } catch {}
+      if (reachable) {
+        try {
+          info = await rawCall('server_info', {}, 8000);
+        } catch {}
+        const old = !(info && info.ok && info.version);
+        setServerWarn(old ? 'old_exe' : '');
+        if (!old && isNewerVersion('2.19.0', info.version)) setServerWarn('old_exe');
+      }
+      const served = await getServedVersion();
+      if (served && isNewerVersion(served, APP_VERSION) && !hasUnsent() && !document.querySelector('.modal')) {
+        showToast(`画面を新しい版（v${served}）に切り替えます`, 'ok');
+        setTimeout(() => {
+          if (!hasUnsent() && !document.querySelector('.modal')) location.reload();
+        }, 2500);
+      }
+    };
+    const t = setTimeout(check, 4000);
+    const id = setInterval(check, 120000);
+    return () => {
+      stopped = true;
+      clearTimeout(t);
+      clearInterval(id);
+    };
+  }, []);
+  // 未送信の入力をこのPCに書けない状態を見張る
+  const [logUnsafe, setLogUnsafe] = useState(false);
+  useEffect(() => {
+    const id = setInterval(() => setLogUnsafe(__syncLogUnsafe && __syncLog.length > 0), 2000);
+    return () => clearInterval(id);
   }, []);
 
   // ふりがな自動生成（辞書から常に最新値で上書き。IME入力の不正値も修正）
@@ -8212,7 +8440,18 @@ function App() {
   }, unsent.issue) : null) : "データは自動保存されます", /*#__PURE__*/React.createElement("br", null), "登録者: ", data.users.length, "名\u3000スタッフ: ", data.staff.length, "名", /*#__PURE__*/React.createElement("br", null), "v", APP_VERSION)), /*#__PURE__*/React.createElement("div", {
     key: dispView,
     className: `main ${animCls}`
-  }, dispView === 'dashboard' && /*#__PURE__*/React.createElement(Dashboard, {
+  }, (serverWarn === 'old_exe' || logUnsafe) && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: '#fde8e8',
+      border: '2px solid #d33',
+      color: '#7a1010',
+      borderRadius: 10,
+      padding: '12px 16px',
+      marginBottom: 16,
+      fontSize: 13,
+      lineHeight: 1.7
+    }
+  }, serverWarn === 'old_exe' && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("b", null, "⚠ 親機の SmartSync.exe が古い版のままです。入力が消える原因になるため、必ず更新してください。"), /*#__PURE__*/React.createElement("br", null), "親機のPCで https://github.com/ar3217799-lgtm/serenova/releases/latest を開き、SmartSync_Windows.zip をダウンロードして展開 → 親機のPCを再起動 → 展開した SmartSync.exe をダブルクリック（「いつも使っているデータが見つかりました」と出たら「はい」）。"), logUnsafe && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("b", null, "⚠ 親機に届いていない入力をこのPCに保存できません。"), "親機と通信できるようになるまで、この画面を閉じないでください。")), dispView === 'dashboard' && /*#__PURE__*/React.createElement(Dashboard, {
     data: data,
     setData: setData,
     setView: navigateTo
