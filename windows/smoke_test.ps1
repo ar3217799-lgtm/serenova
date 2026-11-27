@@ -10,7 +10,7 @@ function Stop-All {
   Start-Sleep -Seconds 2
 }
 function Call($m, $body) {
-  Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8765/api/$m" -ContentType 'application/json' -Body ($body | ConvertTo-Json -Compress)
+  Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8765/api/$m" -ContentType 'application/json' -Body ($body | ConvertTo-Json -Compress -EscapeHandling EscapeNonAscii)
 }
 function Wait-Server {
   for ($i = 0; $i -lt 90; $i++) {
@@ -29,6 +29,18 @@ Copy-Item $exe "$d\SmartSync.exe"
 Copy-Item $html "$d\SmartSync.html"
 $p1 = Start-Process -FilePath "$d\SmartSync.exe" -WorkingDirectory $d -PassThru
 Wait-Server
+# 1b. 親機の版情報と、消えた記録の保管庫
+Call 'register_device' @{ device_id = 'smoke'; name = 'smoke' } | Out-Null
+$info = Call 'server_info' @{ device_id = 'smoke' }
+if ($info.result.version -ne '2.19.0') { Stop-All; throw "server_info version: $($info.result.version)" }
+$r = Call 'load_data' @{ device_id = 'smoke' }
+$j1 = '{"users": [], "contactNotes": [{"id": "n1", "details": "消える予定のノート"}]}'
+$s1 = Call 'save_data' @{ device_id = 'smoke'; json_str = $j1; base_rev = $r.result.rev; client_version = 'smoke' }
+$s2 = Call 'save_data' @{ device_id = 'smoke'; json_str = '{"users": [], "contactNotes": []}'; base_rev = $s1.result.rev; client_version = 'smoke' }
+$h = Call 'list_history' @{ device_id = 'smoke' }
+if (-not $s2.result.ok -or -not ($h.result.items | Where-Object { $_.kind -eq 'deleted' -and $_.record.details -eq '消える予定のノート' })) { Stop-All; throw 'history archive missing' }
+Write-Host '::notice title=smoke 1b::親機の版 2.19.0 を返し、削除された連絡ノートを保管庫に残す'
+
 $p2 = Start-Process -FilePath "$d\SmartSync.exe" -WorkingDirectory $d -PassThru
 $p2.WaitForExit(90000) | Out-Null
 $log = Get-Content "$d\smartsync.log" -Raw -Encoding UTF8

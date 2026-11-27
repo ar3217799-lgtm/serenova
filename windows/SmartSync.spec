@@ -7,7 +7,7 @@ a = Analysis(
     binaries=[],
     # 画面ファイルを同梱（exe の隣に SmartSync.html が無い場合の予備）
     datas=[(os.path.join(SPECPATH, '..', 'SmartSync.html'), '.')],
-    hiddenimports=['licensing', 'rsa', 'rsa.pkcs1', 'rsa.key', 'rsa.core',
+    hiddenimports=['licensing', 'logging.handlers', 'rsa', 'rsa.pkcs1', 'rsa.key', 'rsa.core',
                    'rsa.common', 'rsa.transform', 'rsa.randnum', 'pyasn1',
                    'pyasn1.codec.der.decoder', 'pyasn1.codec.der.encoder'],
     hookspath=[],

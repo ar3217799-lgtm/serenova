@@ -148,13 +148,25 @@ BACKUP_DIR   = os.path.join(os.path.expanduser('~'), 'Desktop', 'SmartSyncバッ
 LOG_PATH     = os.path.join(APP_DIR, 'smartsync.log')
 
 DEFAULT_PORT = 8765
+# 親機の本体（この exe）の版。画面側はこれを見て、古い exe のままなら更新を促す。
+SERVER_VERSION = '2.19.0'
+SERVER_STARTED = datetime.now().isoformat(timespec='seconds')
+# 消えた・上書きされた記録の保管庫（復元用）。連絡ノート・カルテ・利用者・スタッフの
+# 記録が保存で削除されたり内容が変わったりした時、変わる前の記録をここに残す。
+HISTORY_PATH = os.path.join(APP_DIR, 'history_records.jsonl')
+HISTORY_MAX_BYTES = 30 * 1024 * 1024
 
-logging.basicConfig(
-    filename=LOG_PATH,
-    level=logging.INFO,
-    format='%(asctime)s %(levelname)s %(message)s',
-    encoding='utf-8',
-)
+# 保存のたびに1行残すため、ファイルが大きくなり過ぎないよう 5MB×5世代で回す
+import logging.handlers  # noqa: E402
+try:
+    _log_handler = logging.handlers.RotatingFileHandler(LOG_PATH, maxBytes=5 * 1024 * 1024,
+                                                        backupCount=5, encoding='utf-8')
+    _log_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+    logging.getLogger().addHandler(_log_handler)
+    logging.getLogger().setLevel(logging.INFO)
+except Exception:
+    logging.basicConfig(filename=LOG_PATH, level=logging.INFO,
+                        format='%(asctime)s %(levelname)s %(message)s', encoding='utf-8')
 
 
 def log(msg):
@@ -441,7 +453,81 @@ def api_get_rev():
         return {'rev': _rev}
 
 
-def api_save_data(json_str, base_rev):
+# ── 消えた・上書きされた記録の保管 ───────────────────────────────────────
+_HISTORY_KEYS = {'contactNotes': 'id', 'karteRecords': 'id', 'users': 'id', 'staff': 'id'}
+
+
+def _record_history(old_obj, new_obj, device_id, new_rev):
+    """保存で消えた記録・内容が変わった記録の「変わる前」を保管庫に追記する。
+    保管に失敗しても保存自体は止めない（ログにだけ残す）。"""
+    try:
+        if not isinstance(old_obj, dict) or not isinstance(new_obj, dict):
+            return {}
+        now = datetime.now().isoformat(timespec='seconds')
+        dev = _read_devices().get(device_id or '', {}).get('name', '') if device_id else ''
+        lines, counts = [], {}
+        for coll, key in _HISTORY_KEYS.items():
+            olds = {str(r.get(key)): r for r in (old_obj.get(coll) or []) if isinstance(r, dict) and r.get(key)}
+            news = {str(r.get(key)): r for r in (new_obj.get(coll) or []) if isinstance(r, dict) and r.get(key)}
+            for k, r in olds.items():
+                if k not in news:
+                    kind = 'deleted'
+                elif news[k] != r:
+                    kind = 'changed'
+                else:
+                    continue
+                counts[f'{coll}:{kind}'] = counts.get(f'{coll}:{kind}', 0) + 1
+                lines.append(json.dumps({'t': now, 'rev': new_rev, 'device': device_id or '', 'deviceName': dev,
+                                         'coll': coll, 'kind': kind, 'record': r}, ensure_ascii=False))
+        if lines:
+            if os.path.exists(HISTORY_PATH) and os.path.getsize(HISTORY_PATH) > HISTORY_MAX_BYTES:
+                os.replace(HISTORY_PATH, HISTORY_PATH + '.1')
+            with open(HISTORY_PATH, 'a', encoding='utf-8') as f:
+                f.write('\n'.join(lines) + '\n')
+        return counts
+    except Exception as e:
+        log(f'保管庫への記録エラー: {e}')
+        return {}
+
+
+def api_list_history(limit=400):
+    """保管庫の新しい順の記録（画面の「消えた記録の復元」用）。"""
+    out = []
+    for path in (HISTORY_PATH, HISTORY_PATH + '.1'):
+        if len(out) >= limit or not os.path.exists(path):
+            continue
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                rows = f.readlines()
+            for ln in reversed(rows):
+                if len(out) >= limit:
+                    break
+                try:
+                    out.append(json.loads(ln))
+                except Exception:
+                    pass
+        except Exception as e:
+            log(f'保管庫の読込エラー: {e}')
+    return {'ok': True, 'items': out}
+
+
+def api_server_info():
+    try:
+        mtime = datetime.fromtimestamp(os.path.getmtime(DATA_PATH)).isoformat(timespec='seconds') if os.path.exists(DATA_PATH) else ''
+    except Exception:
+        mtime = ''
+    return {'ok': True, 'version': SERVER_VERSION, 'pid': os.getpid(), 'started': SERVER_STARTED,
+            'appDir': APP_DIR, 'dataMtime': mtime, 'rev': _rev}
+
+
+def _count(obj, coll):
+    try:
+        return len(obj.get(coll) or [])
+    except Exception:
+        return -1
+
+
+def api_save_data(json_str, base_rev, device_id=None, client_version=None):
     """版番号が食い違う保存は拒否し、最新データを返す（上書き消失を防ぐ）。"""
     global _rev, _data_str
     with _lock:
@@ -450,9 +536,15 @@ def api_save_data(json_str, base_rev):
         if _data_str is not None and base_rev is not None and int(base_rev) != _rev:
             return {'ok': False, 'conflict': True, 'rev': _rev, 'json': _data_str}
         try:
-            json.loads(json_str)          # 壊れたJSONは書き込まない
+            new_obj = json.loads(json_str)          # 壊れたJSONは書き込まない
         except Exception as e:
             return {'ok': False, 'reason': f'invalid_json: {e}'}
+        if not isinstance(new_obj, dict):
+            return {'ok': False, 'reason': 'invalid_json: not an object'}
+        try:
+            old_obj = json.loads(_data_str) if _data_str else {}
+        except Exception:
+            old_obj = {}
         _daily_backup()
         prev_rev, prev_str = _rev, _data_str
         _data_str = json_str
@@ -466,6 +558,16 @@ def api_save_data(json_str, base_rev):
             _rev, _data_str = prev_rev, prev_str
             log(f'保存エラー: {e}')
             return {'ok': False, 'reason': f'write_failed: {e}'}
+        changes = _record_history(old_obj, new_obj, device_id, _rev)
+        # 保存のたびに、誰が・どの版の画面で・連絡ノート等が何件になったかを残す
+        # （入力が消えたと言われた時に、いつ・どのPCの保存で消えたか追えるように）
+        log(f'保存 rev={_rev} 端末={device_id or "-"} 画面v{client_version or "?"} '
+            f'連絡ノート={_count(new_obj, "contactNotes")} カルテ={_count(new_obj, "karteRecords")} '
+            f'当日入力={_count(new_obj, "dailyAttendance")}'
+            + (f' 変更={changes}' if changes else ''))
+        dropped = _count(old_obj, 'contactNotes') - _count(new_obj, 'contactNotes')
+        if dropped >= 3:
+            log(f'⚠ 連絡ノートが一度に {dropped} 件減りました（端末={device_id}）。history_records.jsonl に保管済み')
         return {'ok': True, 'rev': _rev}
 
 
@@ -742,6 +844,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = get_pair_code()
             elif path == '/api/regenerate_pair_code':
                 result = regenerate_pair_code()
+            elif path == '/api/server_info':
+                result = api_server_info()
             elif path == '/api/get_license_info':
                 result = get_license_info()
             elif not device_allowed(did):
@@ -752,7 +856,10 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/get_rev':
                 result = api_get_rev()
             elif path == '/api/save_data':
-                result = api_save_data(body.get('json_str', ''), body.get('base_rev'))
+                result = api_save_data(body.get('json_str', ''), body.get('base_rev'),
+                                       did, body.get('client_version'))
+            elif path == '/api/list_history':
+                result = api_list_history()
             elif path == '/api/save_excel':
                 result = save_excel(body.get('filename'), body.get('b64data'))
             elif path == '/api/update_app':
